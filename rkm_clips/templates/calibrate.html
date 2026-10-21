@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calibrar marcador · DevStudio FC Clips</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  {% include "_topbar.html" %}
+
+  <main>
+    <div class="page-head">
+      <div>
+        <h1>Calibrar marcador</h1>
+        <p>Carga un momento del VOD donde se vea el marcador y marca cada parte arrastrando un recuadro.</p>
+      </div>
+    </div>
+
+    <div class="calib">
+      <div>
+        <div class="stage" id="stage">
+          <div class="placeholder" id="placeholder">Elige un VOD y un instante con el marcador visible, y pulsa «Cargar fotograma».</div>
+          <canvas id="canvas" hidden></canvas>
+        </div>
+        <div class="stage-bar">
+          <button class="btn sm" id="btn-zoom" disabled>Ampliar marcador</button>
+          <button class="btn sm primary" id="btn-save" disabled>Guardar recuadro</button>
+          <span class="hint" id="stage-hint">Arrastra sobre la imagen para dibujar un recuadro.</span>
+        </div>
+      </div>
+
+      <aside class="panel">
+        <section id="pendientes" class="pending" hidden>
+          <h3>Números sin reconocer <span class="badge" id="pending-count"></span></h3>
+          <p class="pending-help">En estos momentos se ve el nombre de tu equipo pero el número no casa con ninguna plantilla, así que puede faltar algún gol. Pulsa «Ver», mira el número y dime cuál es.</p>
+          <div class="pending-list" id="pending-list"></div>
+          <div class="pending-answer" id="pending-answer" hidden>
+            <div class="pending-q">¿Qué número tiene tu equipo en la imagen?</div>
+            <div class="digits" id="answer-digits"></div>
+            <button class="btn sm ghost" id="btn-dismiss" style="margin-top:6px">No se ve bien, descartar</button>
+          </div>
+        </section>
+
+        <section>
+          <h3>1 · Fotograma</h3>
+          <div class="field">
+            <label for="vod">VOD</label>
+            <select id="vod"></select>
+          </div>
+          <div class="field" style="margin-top:8px">
+            <label for="at">Instante (hh:mm:ss)</label>
+            <div class="row">
+              <input type="text" id="at" value="00:10:00" inputmode="numeric">
+              <button class="btn" id="btn-frame">Cargar fotograma</button>
+            </div>
+          </div>
+          <div class="hint" id="frame-info" style="margin-top:6px;color:var(--muted);font-size:12px"></div>
+        </section>
+
+        <section>
+          <h3>2 · Marca cada parte</h3>
+          <div class="field" style="margin-bottom:10px">
+            <label for="team">Nombre de tu equipo (como sale en el marcador)</label>
+            <input type="text" id="team" maxlength="30" placeholder="Ej.: RKM" autocomplete="off">
+          </div>
+          <div class="modes">
+            <label class="mode"><input type="radio" name="mode" value="roi" checked>
+              <span><b>Zona del marcador</b><small>Todo el recuadro de arriba a la izquierda, con algo de margen.</small></span>
+              <span class="done" id="done-roi"></span></label>
+            <label class="mode"><input type="radio" name="mode" value="label">
+              <span><b>Nombre de tu equipo</b><small>Solo las letras del nombre en el marcador (p. ej. «RKM»), ajustado. Es lo único propio de cada club.</small></span>
+              <span class="done" id="done-label"></span></label>
+            <label class="mode"><input type="radio" name="mode" value="number">
+              <span><b>Zona del número</b><small>Donde aparecen los goles de tu equipo, sin el escudo. Deja hueco para 2 cifras.</small></span>
+              <span class="done" id="done-number"></span></label>
+            <label class="mode"><input type="radio" name="mode" value="digit">
+              <span><b>Un dígito</b><small>Recuadra solo la cifra y elige cuál es. Hacen falta del 0 al 9 con el tiempo.</small></span></label>
+          </div>
+          <div class="digits" id="digits" style="margin-top:10px"></div>
+          <div class="tpl-preview" id="tpl-preview" style="margin-top:10px"></div>
+        </section>
+
+        <section>
+          <h3>3 · Comprobar</h3>
+          <button class="btn" id="btn-test" style="width:100%">Probar lectura en este fotograma</button>
+          <div class="test-result" id="test-result" hidden style="margin-top:10px"></div>
+        </section>
+      </aside>
+    </div>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
+  <script src="{{ url_for('static', filename='calibrate.js') }}"></script>
+</body>
+</html>

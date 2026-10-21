@@ -1,0 +1,20 @@
+<header class="topbar">
+  <a class="brand" href="{{ url_for('index') }}" style="color:inherit;text-decoration:none"><span class="brand-mark">FC</span> DevStudio FC Clips</a>
+  <nav class="row">
+    <a class="btn ghost sm" href="{{ url_for('index') }}">VODs</a>
+    <a class="btn ghost sm" href="{{ url_for('calibrate_page') }}">Calibrar marcador</a>
+  </nav>
+  <span class="spacer"></span>
+  <label class="switch" title="Revisa Twitch cada pocos minutos y genera los clips de cada VOD nuevo sin pedírtelo">
+    <input type="checkbox" id="auto-toggle">
+    <span class="track"></span>
+    <span>Automático</span>
+  </label>
+  <div class="user">
+    {% if user.profile_image_url %}<img src="{{ user.profile_image_url }}" alt="">{% endif %}
+    <strong>{{ user.display_name }}</strong>
+  </div>
+  <form method="post" action="{{ url_for('auth_logout') }}">
+    <button class="btn ghost sm" type="submit">Salir</button>
+  </form>
+</header>

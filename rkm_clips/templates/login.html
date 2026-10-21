@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand"><span class="brand-mark">FC</span> {{ app_name }}</div>
+      <h1>Tus goles, ya cortados</h1>
+      <p>Conecta tu cuenta de Twitch para ver tus VODs y generar un clip de cada gol de tu equipo.</p>
+      {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+
+      <div id="step-start">
+        <button class="btn twitch" id="btn-connect" type="button">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.3 3 3 6.4v13.1h4.5V22h2.6l2.4-2.5h3.6l4.9-4.9V3H4.3Zm15 10.8-2.8 2.8H12l-2.4 2.4v-2.4H5.8V4.7h13.5v9.1ZM16.6 8v4.8h-1.7V8h1.7Zm-4.5 0v4.8h-1.7V8h1.7Z"/></svg>
+          Conectar con Twitch
+        </button>
+        <div class="hint">Solo se lee tu nombre y tus VODs públicos: la app no publica nada ni pide permisos sobre tu canal.</div>
+      </div>
+
+      <div id="step-code" hidden>
+        <div class="code-help">Escribe este código en la página de Twitch que se acaba de abrir:</div>
+        <div class="user-code" id="user-code" aria-live="polite">········</div>
+        <a class="btn" id="btn-open" href="#" target="_blank" rel="noopener">Abrir twitch.tv/activate</a>
+        <div class="hint" id="code-status">Esperando a que autorices en Twitch…</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let timer = null;
+
+    async function post(path) {
+      const res = await fetch(path, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    function showError(message) {
+      clearTimeout(timer);
+      $("step-code").hidden = true;
+      $("step-start").hidden = false;
+      const box = document.querySelector(".login-error") || Object.assign(document.createElement("div"), { className: "login-error" });
+      box.textContent = message;
+      $("step-start").before(box);
+      $("btn-connect").disabled = false;
+    }
+
+    async function poll(interval) {
+      const { ok, data } = await post("/auth/device/poll");
+      if (ok && data.status === "ok") {
+        $("code-status").textContent = `Conectado como ${data.login}. Entrando…`;
+        location.href = "/";
+        return;
+      }
+      if (!ok) { showError(data.error || "No se pudo conectar con Twitch"); return; }
+      timer = setTimeout(() => poll(interval), interval * 1000);
+    }
+
+    $("btn-connect").addEventListener("click", async () => {
+      $("btn-connect").disabled = true;
+      const { ok, data } = await post("/auth/device/start");
+      if (!ok) { showError(data.error || "No se pudo iniciar la conexión"); return; }
+      $("user-code").textContent = data.user_code;
+      $("btn-open").href = data.verification_uri;
+      $("step-start").hidden = true;
+      $("step-code").hidden = false;
+      window.open(data.verification_uri, "_blank", "noopener");
+      const every = Math.max(data.interval, 3);
+      timer = setTimeout(() => poll(every), every * 1000);
+    });
+  </script>
+</body>
+</html>
