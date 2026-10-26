@@ -136,14 +136,25 @@ def apply_update(root: Path = PROJECT_DIR, repo: str = REPO, branch: str = BRANC
     return new_ref
 
 
-def restart_soon(root: Path = PROJECT_DIR, delay_s: int = 4) -> None:
+# Pequeño programa que espera, y arranca la app de nuevo. Se ejecuta con Python y no con `cmd /c`: la
+# orden iba con comillas escapadas con barra (\"), que cmd no entiende, y Windows acababa intentando abrir un
+# archivo llamado «\» (rutas con espacios o acentos, como «Méndez», lo empeoraban).
+_RELAUNCH = (
+    "import subprocess, sys, time; time.sleep(float(sys.argv[1])); "
+    "subprocess.Popen(sys.argv[3:], cwd=sys.argv[2], close_fds=True, creationflags=%d)"
+)
+_DETACHED = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+_NO_WINDOW_FLAGS = 0x00000008 | 0x08000000
+
+
+def restart_soon(root: Path = PROJECT_DIR, delay_s: int = 4, argv: list[str] | None = None) -> None:
     """Relanza la app tras cerrarse: un proceso aparte espera a que este suelte el bloqueo y arranca otro."""
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe") if os.name == "nt" and exe.with_name("pythonw.exe").exists() else exe
+    argv = argv or [str(pythonw), "-m", "rkm_clips", "serve"]
     if os.name == "nt":
-        cmd = f'ping -n {delay_s + 1} 127.0.0.1 >nul & start "" /D "{root}" "{pythonw}" -m rkm_clips serve'
-        subprocess.Popen(["cmd", "/c", cmd], creationflags=0x00000008 | 0x08000000,  # DETACHED | NO_WINDOW
-                         close_fds=True)
+        subprocess.Popen([str(pythonw), "-c", _RELAUNCH % _DETACHED, str(delay_s), str(root), *argv],
+                         creationflags=_NO_WINDOW_FLAGS, close_fds=True)
     else:  # pragma: no cover - la app es para Windows; esto solo ayuda en desarrollo
         subprocess.Popen(["sh", "-c", f'sleep {delay_s}; cd "{root}" && "{exe}" -m rkm_clips serve'],
                          start_new_session=True)

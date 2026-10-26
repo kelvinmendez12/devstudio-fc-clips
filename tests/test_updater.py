@@ -1,4 +1,5 @@
 import io
+import os
 import time
 import zipfile
 
@@ -92,3 +93,22 @@ def test_git_checkout_refuses_to_update_with_local_changes(app_dir, monkeypatch)
     monkeypatch.setattr(updater, "_git", lambda root, *a: answers.get(a[0], ""))
     with pytest.raises(updater.UpdateError, match="cambios locales"):
         updater.apply_update(root=app_dir)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="el relanzador de Windows")
+def test_restart_works_with_spaces_and_accents_in_the_path(tmp_path):
+    """Regresión: con rutas con espacios y acentos (Kelvin Méndez) el reinicio no arrancaba y Windows mostraba un error de archivo no encontrado."""
+    import sys
+    import time
+    from rkm_clips import updater
+    root = tmp_path / "Kelvin Méndez" / "mi app"
+    root.mkdir(parents=True)
+    marker = root / "arrancó.txt"
+    code = "import os; open('arrancó.txt', 'w', encoding='utf-8').write(os.getcwd())"
+    updater.restart_soon(root=root, delay_s=1, argv=[sys.executable, "-c", code])
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+    assert marker.exists(), "la app no se relanzó"
+    assert marker.read_text(encoding="utf-8").endswith("mi app")     # y lo hizo en la carpeta de la app
