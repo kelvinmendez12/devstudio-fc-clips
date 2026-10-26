@@ -153,6 +153,11 @@ class Config:
         return self.data_dir / "rkm_clips.sqlite3"
 
     @property
+    def club_dir(self) -> Path:
+        """Logo del club subido desde el panel (dato del usuario: no va al repositorio)."""
+        return self.data_dir / "club"
+
+    @property
     def vods_dir(self) -> Path:
         return self.data_dir / "vods"
 
