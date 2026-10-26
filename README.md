@@ -29,22 +29,32 @@ al iniciar sesión en Windows.
 
 ### Versión vertical para TikTok
 
-Al terminar cada VOD, la app crea sola una versión **9:16** de cada gol (unos 10 segundos por clip):
-fondo difuminado, la jugada a pantalla ancha con la cámara siguiendo la acción, «¡GOOOL!» y el marcador
-arriba, **repetición del gol a cámara lenta** al final y tu canal abajo. En cada clip tienes **Ver TikTok**,
-descargar y **copiar el texto del post** (con hashtags), y en cada VOD un botón para crearlas todas.
-Dura unos 25 s, lo que mejor funciona en vídeos de este tipo. Pon el nombre de tu equipo en *Calibrar
-marcador* para que salga en el marcador del vídeo.
+Al terminar cada VOD, la app crea sola una versión **9:16** de cada gol (unos 10-15 segundos por clip):
+fondo difuminado, la jugada a pantalla ancha con la cámara siguiendo la acción, un marcador de televisión
+arriba con tu escudo («¡GOOOL!» y el resultado), **repetición del gol a cámara lenta** al final y tu canal
+abajo. En cada clip tienes **Ver TikTok**, descargar y **copiar el texto del post** (con hashtags), y en cada
+VOD un botón para crearlas todas. Dura unos 25 s, lo que mejor funciona en vídeos de este tipo.
+
+**Identidad del club.** En **Identidad del club** (arriba) subes tu logo (PNG con fondo transparente es lo
+ideal; también JPG o WebP) y la app saca sola el color de tu club: de ahí salen la placa, el marcador y los
+bordes. Verás la vista previa al momento, con marcadores de una y de dos cifras. Si tu logo ya lleva el nombre,
+no se repite; si no, activa «Mostrar el nombre del club junto al logo». Sin logo se dibuja un escudo con las
+iniciales. Tu logo se guarda solo en tu ordenador y solo sale dentro de los vídeos que tú envíes a TikTok.
+Si cambias el logo o el color, los vídeos ya hechos se marcan como «Diseño anterior» y un botón por VOD
+(**Rehacer con el nuevo diseño**) los rehace; los que ya enviaste a TikTok no se tocan.
 
 **Enviar a tu TikTok como borrador.** Con `TIKTOK_CLIENT_KEY` y `TIKTOK_CLIENT_SECRET` en el `.env` (de tu
 app en developers.tiktok.com, ver `.env.example`), el panel muestra **Conectar TikTok**. Después, cada clip
 vertical tiene **Enviar a TikTok** y cada VOD **Enviar a TikTok (N)**: el vídeo llega a la bandeja de tu
 app de TikTok **como borrador**; tú lo revisas, pegas el texto del post (botón de copiar) y pulsas publicar.
-**Varios goles en un solo vídeo.** En cada gol con versión vertical hay una casilla **Juntar**: marca dos o
-más y pulsa **Juntar N en un TikTok**. La app los une por orden de partido en un solo vídeo (instantáneo, sin
-perder calidad) y lo deja debajo de los goles, con su texto de post y su botón **Enviar a TikTok**; así solo
-tienes que pulsar publicar, sin descargar ni editar nada, y cuenta como un único borrador. La app nunca publica por ti. TikTok admite como máximo **5 borradores pendientes al día**; el panel cuenta
+La app nunca publica por ti. TikTok admite como máximo **5 borradores pendientes al día**; el panel cuenta
 los que envías y avisa cuando te quedas sin cupo.
+
+**Varios goles en un solo vídeo.** En cada gol con versión vertical hay una casilla **Juntar**: marca dos o
+más y pulsa **Juntar N en un TikTok**. La app los une por orden de partido en un solo vídeo (tarda unos
+segundos: se recodifica para que TikTok lo acepte) y lo deja debajo de los goles, con su texto de post y su
+botón **Enviar a TikTok**. Así solo tienes que pulsar publicar, sin descargar ni editar nada, y cuenta como un
+único borrador.
 
 ### Si algún número no se lee
 

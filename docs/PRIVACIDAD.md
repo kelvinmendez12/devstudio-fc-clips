@@ -15,6 +15,9 @@ No existe un servidor del proyecto que reciba, guarde o procese datos de los usu
   nombre solo para lo que has autorizado. Se guardan en una base de datos local, sin cifrar, protegida solo
   por los permisos de tu usuario de Windows.
 - La lista de tus VODs, copias temporales de los VODs descargados para analizarlos y los clips generados.
+- Si lo subes, el logo de tu club (en `%LOCALAPPDATA%\DevStudioFCClips\club`) y el color elegido. El logo
+  aparece dentro de los vídeos verticales; no se envía a ningún servicio salvo dentro de los vídeos que tú
+  mandes a TikTok.
 
 **Qué sale del ordenador.**
 
@@ -44,6 +47,9 @@ There is no project server that receives, stores or processes user data.
   only for what you authorized. They are kept in a local database protected only by your operating-system
   user permissions.
 - The list of your VODs, temporary copies of downloaded VODs used for analysis, and the generated clips.
+- If you upload it, your club's logo (in `%LOCALAPPDATA%\DevStudioFCClips\club`) and the colour you chose.
+  The logo appears inside the vertical videos; it is not sent to any service except inside the videos you
+  choose to send to TikTok.
 
 **What leaves the computer.**
 
