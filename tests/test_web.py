@@ -16,6 +16,15 @@ class FakeWorker:
 
     def __init__(self):
         self.queued = []
+        self.renders = []
+
+    def enqueue_render(self, db, clip_id):
+        self.renders.append(clip_id)
+        db.set_tiktok(clip_id, "queued")
+        return True
+
+    def enqueue_renders_for_vod(self, db, vod_id):
+        return sum(self.enqueue_render(db, c["id"]) for c in db.clips_missing_tiktok(vod_id))
 
     def enqueue(self, db, vod_id):
         self.queued.append(vod_id)
@@ -252,3 +261,69 @@ def test_state_reports_update_availability(setup):
     db.set_meta("update", {"available": True, "latest": "abc", "checked_at": 1})
     state = client.get("http://localhost/api/state").get_json()
     assert state["update"]["available"] is True
+
+
+def add_clip(cfg, db, vod_id="1", new=2, exists=True):
+    from rkm_clips.detector import Change
+    cfg.clips_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg.clips_dir / f"clip{new}.mp4"
+    if exists:
+        path.write_bytes(b"clip-original")
+    db.add_clip(vod_id, Change(at_s=95.0, old=new - 1, new=new, last_old_s=94.0), 79.0, 97.0, path, None)
+    return db.clips_for(vod_id)[-1]["id"], path
+
+
+def test_clip_json_reports_tiktok_state_and_caption(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    db.set_meta("team", "RKM")
+    clip_id, _ = add_clip(cfg, db)
+    db.mark_done("1", 1)
+    clip = client.get("http://localhost/api/state").get_json()["vods"][0]["clips"][0]
+    assert clip["tiktok"]["status"] == "" and "RKM" in clip["tiktok"]["caption"]
+    assert "marca el 2" in clip["tiktok"]["caption"] and "#" in clip["tiktok"]["caption"]
+
+
+def test_creating_the_tiktok_version_queues_it_and_downloads_when_ready(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    clip_id, path = add_clip(cfg, db)
+    assert client.get(f"http://localhost/media/tiktok/{clip_id}").status_code == 404   # aún no existe
+
+    assert client.post(f"http://localhost/api/clips/{clip_id}/tiktok").status_code == 200
+    assert worker.renders == [clip_id]
+    state = client.get("http://localhost/api/state").get_json()
+    assert state["vods"][0]["clips"][0]["tiktok"]["status"] == "queued"
+
+    vertical = path.with_name(path.stem + "_tiktok.mp4")
+    vertical.write_bytes(b"vertical")
+    db.set_tiktok(clip_id, "ready", path=vertical)
+    watch = client.get(f"http://localhost/media/tiktok/{clip_id}")
+    assert watch.data == b"vertical"
+    dl = client.get(f"http://localhost/media/tiktok/{clip_id}?download=1")
+    assert "attachment" in dl.headers["Content-Disposition"] and "_tiktok.mp4" in dl.headers["Content-Disposition"]
+    watch.close()   # en Windows un archivo servido no se puede borrar hasta cerrar la respuesta
+    dl.close()
+
+    vertical.unlink()   # si se borra a mano, el panel deja de darla por lista
+    assert client.get("http://localhost/api/state").get_json()["vods"][0]["clips"][0]["tiktok"]["status"] == ""
+    assert client.get(f"http://localhost/media/tiktok/{clip_id}").status_code == 404
+
+
+def test_tiktok_refuses_when_the_original_clip_is_gone(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    clip_id, _ = add_clip(cfg, db, exists=False)
+    resp = client.post(f"http://localhost/api/clips/{clip_id}/tiktok")
+    assert resp.status_code == 409 and worker.renders == []
+
+
+def test_tiktok_for_the_whole_vod_skips_the_ones_already_done(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    a, _ = add_clip(cfg, db, new=1)
+    b, _ = add_clip(cfg, db, new=2)
+    c, _ = add_clip(cfg, db, new=3)
+    db.set_tiktok(a, "ready", path=cfg.clips_dir / "x.mp4")
+    assert client.post("http://localhost/api/vods/1/tiktok").get_json() == {"queued": 2}
+    assert sorted(worker.renders) == sorted([b, c])

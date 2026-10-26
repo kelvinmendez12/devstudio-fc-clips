@@ -5,3 +5,4 @@ opencv-python-headless>=4.9
 yt-dlp>=2025.1.1
 flask>=3.0
 waitress>=3.0
+pillow>=10.1

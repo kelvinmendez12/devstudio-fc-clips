@@ -14,6 +14,8 @@ const ICONS = {
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>',
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7z"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
 };
 
 let state = null;
@@ -69,6 +71,23 @@ function renderNotices() {
   document.getElementById("notices").innerHTML = n.join("");
 }
 
+function tiktokHtml(c) {
+  const t = c.tiktok || {};
+  if (t.status === "ready") {
+    return `<div class="clip-tt ready">
+      <button class="btn sm primary" data-play-tt="${c.id}" data-title="TikTok · ${c.old} → ${c.new}" data-caption="${esc(t.caption)}">${ICONS.phone} Ver TikTok</button>
+      <a class="icon-btn" href="/media/tiktok/${c.id}?download=1" title="Descargar versión vertical" aria-label="Descargar versión vertical">${ICONS.download}</a>
+      <button class="icon-btn" data-copy="${esc(t.caption)}" title="Copiar el texto del post" aria-label="Copiar el texto del post">${ICONS.copy}</button>
+      <button class="icon-btn" data-tiktok="${c.id}" title="Rehacer la versión vertical" aria-label="Rehacer la versión vertical">${ICONS.spark}</button>
+    </div>`;
+  }
+  if (t.status === "queued" || t.status === "rendering") {
+    return `<div class="clip-tt"><span class="tt-working">${ICONS.phone} ${t.status === "queued" ? "En cola…" : "Creando TikTok…"}</span></div>`;
+  }
+  const err = t.status === "error" ? ` title="${esc(t.error)}"` : "";
+  return `<div class="clip-tt"><button class="btn sm" data-tiktok="${c.id}"${err}>${ICONS.phone} ${t.status === "error" ? "Reintentar TikTok" : "Crear TikTok"}</button></div>`;
+}
+
 function clipHtml(c) {
   const thumb = c.has_thumb ? `<img src="/media/thumb/${c.id}" alt="" loading="lazy">` : "";
   return `<div class="clip">
@@ -83,6 +102,7 @@ function clipHtml(c) {
         <button class="icon-btn" data-reveal="${c.id}" title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">${ICONS.folder}</button>
       </div>
     </div>
+    ${tiktokHtml(c)}
   </div>`;
 }
 
@@ -98,7 +118,11 @@ function vodHtml(v) {
   let action;
   if (v.live) action = `<button class="btn" disabled>En directo…</button>`;
   else if (active) action = `<button class="btn danger" data-cancel="${v.id}">Cancelar</button>`;
-  else if (v.status === "done") action = `<button class="btn" data-generate="${v.id}">Regenerar</button>`;
+  else if (v.status === "done") {
+    const pending = v.clips.filter(c => !["ready", "queued", "rendering"].includes((c.tiktok || {}).status)).length;
+    action = (pending ? `<button class="btn" data-tiktok-vod="${v.id}">${ICONS.phone} TikTok de todos (${pending})</button>` : "") +
+      `<button class="btn" data-generate="${v.id}">Regenerar</button>`;
+  }
   else action = `<button class="btn primary" data-generate="${v.id}">${ICONS.spark} ${v.status === "failed" || v.status === "cancelled" ? "Reintentar" : "Generar clips"}</button>`;
 
   const progress = active
@@ -159,7 +183,8 @@ async function refresh() {
   } catch (e) {
     document.getElementById("sync-line").textContent = e.message;
   }
-  const busy = state && state.vods.some(v => ACTIVE.has(v.status));
+  const busy = state && state.vods.some(v => ACTIVE.has(v.status) ||
+    v.clips.some(c => ["queued", "rendering"].includes((c.tiktok || {}).status)));
   setTimeout(refresh, busy ? 2000 : 10000);
 }
 
@@ -188,10 +213,23 @@ function waitForRestart() {
 }
 
 vodsEl.addEventListener("click", async (ev) => {
-  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal]");
+  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-play-tt],[data-copy]");
   if (!el) return;
   try {
-    if (el.dataset.generate) {
+    if (el.dataset.tiktok) {
+      el.disabled = true;
+      await api(`/api/clips/${el.dataset.tiktok}/tiktok`, { method: "POST" });
+    } else if (el.dataset.tiktokVod) {
+      el.disabled = true;
+      const r = await api(`/api/vods/${el.dataset.tiktokVod}/tiktok`, { method: "POST" });
+      toast(`Creando ${r.queued} versiones para TikTok…`);
+    } else if (el.dataset.playTt) {
+      openPlayer(el.dataset.playTt, el.dataset.title, el.dataset.caption);
+      return;
+    } else if (el.dataset.copy !== undefined) {
+      await copyText(el.dataset.copy);
+      return;
+    } else if (el.dataset.generate) {
       el.disabled = true;
       await api(`/api/vods/${el.dataset.generate}/generate`, { method: "POST" });
       toast("En cola. Puedes cerrar esta pestaña: seguirá trabajando.");
@@ -215,13 +253,32 @@ vodsEl.addEventListener("click", async (ev) => {
 
 const player = document.getElementById("player");
 const video = document.getElementById("player-video");
-function openPlayer(id, title) {
-  video.src = `/media/clip/${id}`;
+const playerCopy = document.getElementById("player-copy");
+let playerCaption = "";
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Texto copiado: pégalo en tu post de TikTok");
+  } catch {
+    toast("No se pudo copiar automáticamente", true);
+  }
+}
+
+// caption presente = versión vertical de TikTok (/media/tiktok); si no, el clip normal.
+function openPlayer(id, title, caption) {
+  const vertical = caption !== undefined;
+  const base = vertical ? "/media/tiktok" : "/media/clip";
+  player.classList.toggle("vertical", vertical);
+  video.src = `${base}/${id}`;
   document.getElementById("player-title").textContent = title;
-  document.getElementById("player-download").href = `/media/clip/${id}?download=1`;
+  document.getElementById("player-download").href = `${base}/${id}?download=1`;
+  playerCaption = caption || "";
+  playerCopy.hidden = !vertical;
   player.showModal();
   video.play().catch(() => {});
 }
+playerCopy.addEventListener("click", () => copyText(playerCaption));
 player.addEventListener("close", () => { video.pause(); video.removeAttribute("src"); video.load(); });
 player.addEventListener("click", (e) => { if (e.target === player) player.close(); });
 document.getElementById("player-close").addEventListener("click", () => player.close());

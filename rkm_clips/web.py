@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
-from . import ffmpeg, updater
+from . import ffmpeg, tiktok, updater
 from .config import APP_NAME, Config
 from .db import ACTIVE, Database
 from .detector import Templates, format_ts, imread_gray, imwrite, preprocess
@@ -191,6 +191,14 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
                 "name": Path(c["path"]).name,
                 "exists": Path(c["path"]).exists(),
                 "has_thumb": bool(c["thumb_path"]) and Path(c["thumb_path"]).exists(),
+                "tiktok": {
+                    # «ready» solo si el archivo sigue ahí (puede haberse borrado a mano)
+                    "status": "ready" if c["tiktok_status"] == "ready" and c["tiktok_path"]
+                              and Path(c["tiktok_path"]).exists() else
+                              ("" if c["tiktok_status"] == "ready" else c["tiktok_status"]),
+                    "error": c["tiktok_error"],
+                    "caption": tiktok.caption_for(cfg, db(), c),
+                },
             }
             for c in db().clips_for(row["id"])
         ]
@@ -286,6 +294,34 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             abort(404)
         return send_file(path, mimetype="video/mp4", conditional=True,
                          as_attachment=request.args.get("download") == "1", download_name=path.name)
+
+    @app.get("/media/tiktok/<int:clip_id>")
+    @login_required
+    def media_tiktok(clip_id):
+        row = clip_row(clip_id)
+        path = Path(row["tiktok_path"]) if row["tiktok_path"] else None
+        if row["tiktok_status"] != "ready" or path is None or not path.exists():
+            abort(404)
+        return send_file(path, mimetype="video/mp4", conditional=True,
+                         as_attachment=request.args.get("download") == "1", download_name=path.name)
+
+    @app.post("/api/clips/<int:clip_id>/tiktok")
+    @login_required
+    def api_tiktok(clip_id):
+        """Crea (o rehace) la versión vertical de un clip."""
+        row = clip_row(clip_id)
+        if not Path(row["path"]).exists():
+            return jsonify(error="El clip original ya no está en la carpeta"), 409
+        worker.enqueue_render(db(), clip_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/vods/<vod_id>/tiktok")
+    @login_required
+    def api_vod_tiktok(vod_id):
+        """Crea la versión vertical de todos los clips del VOD que aún no la tienen."""
+        if db().get_vod(vod_id) is None:
+            abort(404)
+        return jsonify(queued=worker.enqueue_renders_for_vod(db(), vod_id))
 
     @app.get("/media/thumb/<int:clip_id>")
     @login_required
@@ -571,6 +607,7 @@ def serve(cfg: Config) -> None:
     interrupted = db.reset_interrupted()
     if interrupted:
         log.info("%d VODs que estaban a medias quedan como fallidos (se pueden reintentar)", interrupted)
+    db.reset_tiktok_interrupted()
     db.close()
 
     worker = Worker(cfg)

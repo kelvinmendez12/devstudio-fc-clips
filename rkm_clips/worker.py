@@ -7,7 +7,7 @@ import queue
 import threading
 import time
 
-from . import updater
+from . import tiktok, updater
 from .config import Config
 from .db import Database
 from .pipeline import channel_login, is_live_vod, process_vod, sync_vods
@@ -22,6 +22,8 @@ class Worker:
         self._queue: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._pending: set[str] = set()
+        self._renders: queue.Queue[int] = queue.Queue()
+        self._render_pending: set[int] = set()
         self._current: str | None = None
         self._cancel = threading.Event()
         self._wake = threading.Event()
@@ -51,12 +53,29 @@ class Worker:
                 return True
         return False
 
+    def enqueue_render(self, db: Database, clip_id: int) -> bool:
+        """Pide la versión vertical (TikTok) de un clip; se hacen de una en una."""
+        with self._lock:
+            if clip_id in self._render_pending:
+                return False
+            self._render_pending.add(clip_id)
+        db.set_tiktok(clip_id, "queued")
+        self._renders.put(clip_id)
+        return True
+
+    def enqueue_renders_for_vod(self, db: Database, vod_id: str) -> int:
+        n = 0
+        for clip in db.clips_missing_tiktok(vod_id):
+            n += self.enqueue_render(db, clip["id"])
+        return n
+
     def sync_now(self) -> None:
         self._wake.set()
 
     def start(self) -> None:
         threading.Thread(target=self._process_loop, name="rkm-worker", daemon=True).start()
         threading.Thread(target=self._poll_loop, name="rkm-poller", daemon=True).start()
+        threading.Thread(target=self._render_loop, name="rkm-render", daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -80,11 +99,31 @@ class Worker:
                 self._cancel.clear()
             try:
                 process_vod(self.cfg, db, vod_id, self._cancel)
+                row = db.get_vod(vod_id)
+                if self.cfg.tiktok_auto and row and row["status"] == "done":
+                    n = self.enqueue_renders_for_vod(db, vod_id)
+                    if n:
+                        log.info("VOD %s: %d versiones verticales en cola", vod_id, n)
             except Exception:
                 log.exception("Fallo inesperado con el VOD %s", vod_id)
             finally:
                 with self._lock:
                     self._current = None
+
+    def _render_loop(self) -> None:
+        db = Database(self.cfg.db_path)
+        while not self._stop.is_set():
+            try:
+                clip_id = self._renders.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                tiktok.render_clip(self.cfg, db, clip_id)
+            except Exception:
+                log.exception("Fallo inesperado creando la versión vertical del clip %s", clip_id)
+            finally:
+                with self._lock:
+                    self._render_pending.discard(clip_id)
 
     def _poll_loop(self) -> None:
         db = Database(self.cfg.db_path)

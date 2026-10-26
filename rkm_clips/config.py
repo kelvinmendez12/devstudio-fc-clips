@@ -125,6 +125,15 @@ class Config:
     clip_reencode: bool
     keep_vods: bool
 
+    # Versión vertical (TikTok)
+    tiktok_auto: bool
+    tiktok_lead: float
+    tiktok_replay_before: float
+    tiktok_replay_after: float
+    tiktok_replay_slow: float
+    tiktok_tagline: str
+    tiktok_hashtags: str
+
     log_level: str
 
     @property
@@ -182,5 +191,12 @@ def load_config(env_file: Path | None = None) -> Config:
         clip_anchor=_str("CLIP_ANCHOR", "last_old").lower(),
         clip_reencode=_bool("CLIP_REENCODE", True),
         keep_vods=_bool("KEEP_VODS", False),
+        tiktok_auto=_bool("TIKTOK_AUTO", True),
+        tiktok_lead=_float("TIKTOK_LEAD", 10.0),
+        tiktok_replay_before=_float("TIKTOK_REPLAY_BEFORE", 4.5),
+        tiktok_replay_after=_float("TIKTOK_REPLAY_AFTER", 1.0),
+        tiktok_replay_slow=_float("TIKTOK_REPLAY_SLOW", 0.5),
+        tiktok_tagline=_str("TIKTOK_TAGLINE", "EA FC · Clubes Pro"),
+        tiktok_hashtags=_str("TIKTOK_HASHTAGS", "#EAFC #ProClubs #ClubesPro #Gaming"),
         log_level=_str("LOG_LEVEL", "INFO").upper(),
     )

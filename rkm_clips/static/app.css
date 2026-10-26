@@ -232,3 +232,13 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1
   padding: 18px 12px; margin-bottom: 14px; border-radius: 12px;
   background: var(--surface-2); border: 1px dashed var(--accent); color: var(--text); user-select: all;
 }
+
+/* --- versión vertical (TikTok) --------------------------------------- */
+.clip-tt { display: flex; align-items: center; gap: 4px; padding: 0 10px 10px; }
+.clip-tt .btn { flex: 1; }
+.clip-tt.ready .btn { flex: 1; }
+.tt-working { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-2); font-size: 12px; font-weight: 600; padding: 4px 0; }
+.tt-working svg { width: 14px; height: 14px; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+dialog.player.vertical { max-width: min(430px, 94vw); }
+dialog.player.vertical video { max-height: 78vh; }

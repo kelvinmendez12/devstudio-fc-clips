@@ -234,3 +234,78 @@ def test_progress_can_be_reported_from_download_threads(tmp_path):
     t = th.Thread(target=worker); t.start(); t.join()
     assert errors == []
     assert db.get_vod("1")["progress"] == 0.42
+
+
+def test_render_clip_stores_ready_or_error(cfg, tmp_path, monkeypatch):
+    from rkm_clips import tiktok
+    from rkm_clips.detector import Change
+    db = Database(":memory:")
+    db.upsert_vod(vod(1))
+    clip_path = tmp_path / "c.mp4"
+    clip_path.write_bytes(b"x")
+    db.add_clip("1", Change(95.0, 1, 2, 94.0), 79.0, 97.0, clip_path, None)
+    clip_id = db.clips_for("1")[0]["id"]
+    db.set_meta("team", "RKM")
+    seen = {}
+
+    def fake_render(ffmpeg, clip, out, **kw):
+        seen.update(kw)
+        out.write_bytes(b"v")
+        return out
+
+    monkeypatch.setattr(tiktok, "render_vertical", fake_render)
+    out = tiktok.render_clip(cfg, db, clip_id)
+    assert out.name == "c_tiktok.mp4" and db.get_clip(clip_id)["tiktok_status"] == "ready"
+    assert seen["goal_s"] == pytest.approx(15.0) and (seen["old"], seen["new"], seen["team"]) == (1, 2, "RKM")
+
+    def boom(*a, **k):
+        raise RuntimeError("ffmpeg falló")
+
+    monkeypatch.setattr(tiktok, "render_vertical", boom)
+    assert tiktok.render_clip(cfg, db, clip_id) is None
+    row = db.get_clip(clip_id)
+    assert row["tiktok_status"] == "error" and "ffmpeg falló" in row["tiktok_error"]
+    assert row["tiktok_path"] == str(out)   # el archivo anterior se conserva
+
+    clip_path.unlink()
+    tiktok.render_clip(cfg, db, clip_id)
+    assert "ya no está" in db.get_clip(clip_id)["tiktok_error"]
+
+
+def test_worker_renders_queue_runs_one_by_one_and_resets_after_restart(cfg, monkeypatch):
+    import time as _time
+    from rkm_clips import tiktok
+    from rkm_clips.detector import Change
+    from rkm_clips.worker import Worker
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(cfg.db_path)
+    db.upsert_vod(vod(1))
+    ids = []
+    for n in (1, 2, 3):
+        db.add_clip("1", Change(95.0, n - 1, n, 94.0), 79.0, 97.0, cfg.data_dir / f"c{n}.mp4", None)
+    ids = [c["id"] for c in db.clips_for("1")]
+    order, running = [], []
+
+    def fake_render(cfg_, db_, clip_id):
+        running.append(1)
+        assert len(running) == 1, "dos renders a la vez"
+        order.append(clip_id)
+        db_.set_tiktok(clip_id, "ready", path=cfg.data_dir / "v.mp4")
+        running.pop()
+
+    monkeypatch.setattr(tiktok, "render_clip", fake_render)
+    worker = Worker(cfg)
+    worker.start()
+    try:
+        assert worker.enqueue_renders_for_vod(db, "1") == 3
+        assert worker.enqueue_render(db, ids[0]) is False   # ya estaba en cola
+        for _ in range(50):
+            if len(order) == 3:
+                break
+            _time.sleep(0.1)
+    finally:
+        worker.stop()
+    assert order == ids and db.clips_missing_tiktok("1") == []
+
+    db.set_tiktok(ids[0], "rendering")   # la app se cerró a mitad de un render
+    assert db.reset_tiktok_interrupted() == 1 and db.get_clip(ids[0])["tiktok_status"] == ""

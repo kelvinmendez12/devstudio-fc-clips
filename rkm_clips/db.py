@@ -74,7 +74,19 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Columnas añadidas después de la primera versión (SQLite no tiene ADD COLUMN IF NOT EXISTS)."""
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(clips)")}
+        for name, ddl in (("tiktok_path", "TEXT"), ("tiktok_status", "TEXT NOT NULL DEFAULT ''"),
+                          ("tiktok_error", "TEXT")):
+            if name not in have:
+                try:
+                    self.conn.execute(f"ALTER TABLE clips ADD COLUMN {name} {ddl}")
+                except sqlite3.OperationalError:
+                    pass  # otra instancia la añadió justo antes
 
     def close(self) -> None:
         self.conn.close()
@@ -155,6 +167,24 @@ class Database:
             (vod_id, change.last_old_s, start_s, end_s, change.old, change.new, str(path),
              str(thumb) if thumb else None, _now()),
         )
+
+    # Versión vertical (TikTok): '' → queued → rendering → ready | error
+    def set_tiktok(self, clip_id: int, status: str, path: Path | None = None, error: str | None = None) -> None:
+        self._exec(
+            "UPDATE clips SET tiktok_status = ?, tiktok_path = COALESCE(?, tiktok_path), tiktok_error = ? WHERE id = ?",
+            (status, str(path) if path else None, error[:500] if error else None, clip_id),
+        )
+
+    def reset_tiktok_interrupted(self) -> int:
+        cur = self.conn.execute(
+            "UPDATE clips SET tiktok_status = '' WHERE tiktok_status IN ('queued', 'rendering')")
+        self.conn.commit()
+        return cur.rowcount
+
+    def clips_missing_tiktok(self, vod_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM clips WHERE vod_id = ? AND tiktok_status IN ('', 'error') ORDER BY change_s", (vod_id,)
+        ).fetchall()
 
     def delete_clips(self, vod_id: str) -> None:
         self._exec("DELETE FROM clips WHERE vod_id = ?", (vod_id,))
