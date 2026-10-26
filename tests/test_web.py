@@ -281,7 +281,7 @@ def test_clip_json_reports_tiktok_state_and_caption(setup):
     db.mark_done("1", 1)
     clip = client.get("http://localhost/api/state").get_json()["vods"][0]["clips"][0]
     assert clip["tiktok"]["status"] == "" and "RKM" in clip["tiktok"]["caption"]
-    assert "marca el 2" in clip["tiktok"]["caption"] and "#" in clip["tiktok"]["caption"]
+    assert "Gol 2 de RKM" in clip["tiktok"]["caption"] and "#" in clip["tiktok"]["caption"]
 
 
 def test_creating_the_tiktok_version_queues_it_and_downloads_when_ready(setup):

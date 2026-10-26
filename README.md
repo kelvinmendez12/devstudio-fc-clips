@@ -7,6 +7,7 @@ sola leyendo el marcador del juego. Funciona en tu PC con Windows: tus vídeos n
 - Panel en el navegador con tus VODs, miniaturas, progreso y galería de clips (reproducir, descargar, abrir carpeta).
 - Modo **Automático**: procesa cada VOD nuevo en cuanto termina el directo.
 - Cada clip empieza 15 s antes del gol y acaba 3 s después. Sin editar nada.
+- **Versión vertical para TikTok** de cada gol, hecha sola (ver más abajo).
 - Gratis, sin cuentas que crear ni claves que pegar.
 
 ## Instalar (5 minutos, Windows 10 u 11)
@@ -25,6 +26,15 @@ sola leyendo el marcador del juego. Funciona en tu PC con Windows: tus vídeos n
 
 Después, abre la app con el acceso directo del escritorio o en <http://localhost:8765>; también arranca sola
 al iniciar sesión en Windows.
+
+### Versión vertical para TikTok
+
+Al terminar cada VOD, la app crea sola una versión **9:16** de cada gol (unos 10 segundos por clip):
+fondo difuminado, la jugada a pantalla ancha con la cámara siguiendo la acción, «¡GOOOL!» y el marcador
+arriba, **repetición del gol a cámara lenta** al final y tu canal abajo. En cada clip tienes **Ver TikTok**,
+descargar y **copiar el texto del post** (con hashtags), y en cada VOD un botón para crearlas todas.
+Dura unos 25 s, lo que mejor funciona en vídeos de este tipo. Pon el nombre de tu equipo en *Calibrar
+marcador* para que salga en el marcador del vídeo.
 
 ### Si algún número no se lee
 

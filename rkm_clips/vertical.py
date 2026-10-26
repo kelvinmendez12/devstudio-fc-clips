@@ -231,9 +231,9 @@ def text_layer(team: str, old: int, new: int, channel: str, tagline: str, replay
 
 def make_caption(team: str, new: int, channel: str, hashtags: str) -> str:
     """Texto sugerido para el post: lo que se ve antes de «más» son ~100–150 caracteres."""
-    who = f"{team} " if team else ""
+    of = f" de {team}" if team else ""
     live = f" · en directo en twitch.tv/{channel}" if channel else ""
-    return f"¡GOOOL! ⚽ {who}marca el {new}{live} {hashtags}".strip()
+    return f"¡GOOOL! ⚽ Gol {new}{of}{live} {hashtags}".strip()
 
 
 # --- ffmpeg ------------------------------------------------------------------------------------

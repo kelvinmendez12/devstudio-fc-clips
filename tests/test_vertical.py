@@ -47,8 +47,8 @@ def test_smooth_path_removes_jitter():
 
 def test_caption_has_team_score_channel_and_hashtags():
     text = make_caption("RKM", 3, "kangrykelvin", "#EAFC #ProClubs")
-    assert "RKM" in text and "twitch.tv/kangrykelvin" in text and text.endswith("#EAFC #ProClubs")
-    assert make_caption("", 1, "", "#x") == "¡GOOOL! ⚽ marca el 1 #x"
+    assert text == "¡GOOOL! ⚽ Gol 3 de RKM · en directo en twitch.tv/kangrykelvin #EAFC #ProClubs"
+    assert make_caption("", 1, "", "#x") == "¡GOOOL! ⚽ Gol 1 #x"
 
 
 def make_video(path, seconds=10, fps=30, moving=True, audio=True):

@@ -309,3 +309,35 @@ def test_worker_renders_queue_runs_one_by_one_and_resets_after_restart(cfg, monk
 
     db.set_tiktok(ids[0], "rendering")   # la app se cerró a mitad de un render
     assert db.reset_tiktok_interrupted() == 1 and db.get_clip(ids[0])["tiktok_status"] == ""
+
+
+@pytest.mark.parametrize("auto, expected", [(True, 2), (False, 0)])
+def test_finished_vod_gets_its_tiktok_versions_queued_only_when_auto_is_on(cfg, monkeypatch, auto, expected):
+    import time as _time
+    from rkm_clips import tiktok, worker as worker_mod
+    from rkm_clips.detector import Change
+    cfg = replace(cfg, tiktok_auto=auto)
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(cfg.db_path)
+    db.upsert_vod(vod(1))
+    for n in (1, 2):
+        db.add_clip("1", Change(95.0, n - 1, n, 94.0), 79.0, 97.0, cfg.data_dir / f"c{n}.mp4", None)
+    rendered = []
+
+    def fake_process(cfg_, db_, vod_id, cancel):
+        db_.mark_done(vod_id, 2)
+
+    monkeypatch.setattr(worker_mod, "process_vod", fake_process)
+    monkeypatch.setattr(tiktok, "render_clip", lambda c, d, clip_id: rendered.append(clip_id))
+    worker = worker_mod.Worker(cfg)
+    worker.start()
+    try:
+        assert worker.enqueue(db, "1")
+        for _ in range(30):
+            if len(rendered) >= expected and db.get_vod("1")["status"] == "done":
+                break
+            _time.sleep(0.1)
+        _time.sleep(0.3)
+    finally:
+        worker.stop()
+    assert len(rendered) == expected
