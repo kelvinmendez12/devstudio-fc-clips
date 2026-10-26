@@ -1,3 +1,6 @@
+import time
+from urllib.parse import unquote
+
 import numpy as np
 import pytest
 
@@ -17,6 +20,17 @@ class FakeWorker:
     def __init__(self):
         self.queued = []
         self.renders = []
+        self.sends = []
+
+    def enqueue_send(self, db, clip_id):
+        self.sends.append(clip_id)
+        db.set_draft(clip_id, "queued")
+        return True
+
+    def enqueue_sends_for_vod(self, db, vod_id):
+        from rkm_clips import tiktok
+        left = tiktok.drafts_left(db)
+        return sum(self.enqueue_send(db, c["id"]) for c in db.clips_ready_for_draft(vod_id)[:left])
 
     def enqueue_render(self, db, clip_id):
         self.renders.append(clip_id)
@@ -44,6 +58,8 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("CLIPS_DIR", str(tmp_path / "clips"))
     monkeypatch.setenv("TEMPLATES_DIR", str(tmp_path / "plantillas"))
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "ck")
+    monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "cs")
     cfg = load_config(env_file=tmp_path / "no.env")
     worker = FakeWorker()
     app = create_app(cfg, worker)
@@ -327,3 +343,155 @@ def test_tiktok_for_the_whole_vod_skips_the_ones_already_done(setup):
     db.set_tiktok(a, "ready", path=cfg.clips_dir / "x.mp4")
     assert client.post("http://localhost/api/vods/1/tiktok").get_json() == {"queued": 2}
     assert sorted(worker.renders) == sorted([b, c])
+
+
+# --- envío a TikTok como borrador --------------------------------------------
+
+
+def connect_tiktok(db):
+    now = time.time()
+    db.save_tiktok_token({"access": "A", "refresh": "R", "expires_at": now + 3600,
+                          "refresh_expires_at": now + 86400, "open_id": "o"})
+    db.set_meta("tiktok_user", {"open_id": "o", "display_name": "Kelvin", "avatar_url": ""})
+
+
+def add_ready_clip(cfg, db, new=1):
+    clip_id, path = add_clip(cfg, db, new=new)
+    vertical = path.with_name(path.stem + "_tiktok.mp4")
+    vertical.write_bytes(b"vertical")
+    db.set_tiktok(clip_id, "ready", path=vertical)
+    return clip_id
+
+
+def test_state_reports_tiktok_connection(setup):
+    _, _, client, _, db = setup
+    login(client)
+    assert client.get("http://localhost/api/state").get_json()["tiktok"] == {
+        "configured": True, "connected": False, "user": "", "left": 5, "limit": 5}
+    connect_tiktok(db)
+    state = client.get("http://localhost/api/state").get_json()["tiktok"]
+    assert state["connected"] and state["user"] == "Kelvin"
+
+
+def test_tiktok_login_start_redirects_to_tiktok_with_pkce(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    resp = client.get("http://localhost/auth/tiktok/start")
+    assert resp.status_code == 302 and resp.location.startswith("https://www.tiktok.com/v2/auth/authorize/")
+    assert "code_challenge_method=S256" in resp.location and "client_key=ck" in resp.location
+    with client.session_transaction() as s:
+        assert s["tiktok"]["state"] in resp.location
+
+
+def test_tiktok_login_without_keys_explains_what_is_missing(setup, monkeypatch):
+    cfg, app, client, _, _ = setup
+    login(client)
+    monkeypatch.setattr(type(cfg), "tiktok_configured", property(lambda self: False))
+    resp = client.get("http://localhost/auth/tiktok/start")
+    assert resp.status_code == 302 and "tiktok_error" in resp.location and "TIKTOK_CLIENT_KEY" in unquote(resp.location)
+
+
+def test_tiktok_callback_rejects_a_foreign_state(setup):
+    _, _, client, _, db = setup
+    login(client)
+    client.get("http://localhost/auth/tiktok/start")
+    resp = client.get("http://localhost/auth/tiktok/callback?code=c&state=otro")
+    assert "tiktok_error" in resp.location and db.get_tiktok_token() is None
+
+
+def test_tiktok_callback_connects_the_account(setup, monkeypatch):
+    from rkm_clips import tiktok
+    from rkm_clips.tiktok_api import TikTokUser
+
+    class FakeClient:
+        def exchange_code(self, code, verifier):
+            assert code == "c" and verifier
+            connect_tiktok(Database(setup_cfg.db_path))
+            return TikTokUser("o", "Kelvin")
+
+    cfg, _, client, _, db = setup
+    setup_cfg = cfg
+    login(client)
+    monkeypatch.setattr(tiktok, "client_for", lambda cfg, db: FakeClient())
+    client.get("http://localhost/auth/tiktok/start")
+    with client.session_transaction() as s:
+        state = s["tiktok"]["state"]
+    resp = client.get(f"http://localhost/auth/tiktok/callback?code=c&state={state}")
+    assert resp.status_code == 302 and "tiktok=ok" in resp.location
+    assert client.get("http://localhost/api/state").get_json()["tiktok"]["user"] == "Kelvin"
+
+
+def test_sending_needs_a_connected_account_and_a_vertical_version(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    clip_id = add_ready_clip(cfg, db)
+    assert client.post(f"http://localhost/api/clips/{clip_id}/tiktok/send").status_code == 409  # sin conectar
+    connect_tiktok(db)
+    raw_id, _ = add_clip(cfg, db, new=2)   # sin versión vertical
+    assert client.post(f"http://localhost/api/clips/{raw_id}/tiktok/send").status_code == 409
+    assert client.post(f"http://localhost/api/clips/{clip_id}/tiktok/send").status_code == 200
+    assert worker.sends == [clip_id]
+    assert client.post(f"http://localhost/api/clips/{clip_id}/tiktok/send").status_code == 409  # ya en cola
+
+
+def test_sending_stops_at_the_daily_draft_limit(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    connect_tiktok(db)
+    sent = [add_ready_clip(cfg, db, new=n) for n in range(1, 6)]
+    for clip_id in sent:
+        db.set_draft(clip_id, "sent")
+    extra = add_ready_clip(cfg, db, new=6)
+    resp = client.post(f"http://localhost/api/clips/{extra}/tiktok/send")
+    assert resp.status_code == 409 and "5 borradores" in resp.get_json()["error"]
+    assert client.post("http://localhost/api/vods/1/tiktok/send").status_code == 409
+
+
+def test_sending_a_whole_vod_sends_only_what_fits_today(setup):
+    cfg, _, client, worker, db = setup
+    login(client)
+    connect_tiktok(db)
+    ids = [add_ready_clip(cfg, db, new=n) for n in range(1, 8)]
+    for clip_id in ids[:2]:
+        db.set_draft(clip_id, "sent")   # ya hay 2 enviados hoy: caben 3 más
+    resp = client.post("http://localhost/api/vods/1/tiktok/send").get_json()
+    assert resp == {"queued": 3, "remaining": 2}
+    assert worker.sends == ids[2:5]
+
+
+def test_send_draft_marks_the_clip_sent_or_failed(setup, tmp_path):
+    from rkm_clips import tiktok
+    from rkm_clips.tiktok_api import TikTokError
+
+    class FakeClient:
+        def __init__(self, fail=None):
+            self.fail, self.uploaded = fail, []
+
+        def upload_draft(self, path):
+            if self.fail:
+                raise self.fail
+            self.uploaded.append(path.name)
+            return "pub1"
+
+        def wait_for_inbox(self, publish_id):
+            assert publish_id == "pub1"
+
+    cfg, _, _, _, db = setup
+    ok, bad = add_ready_clip(cfg, db, new=1), add_ready_clip(cfg, db, new=2)
+    client = FakeClient()
+    assert tiktok.send_draft(cfg, db, ok, client) is True
+    row = db.get_clip(ok)
+    assert row["draft_status"] == "sent" and row["draft_publish_id"] == "pub1" and row["draft_sent_at"]
+    assert client.uploaded == ["clip1_tiktok.mp4"]
+
+    assert tiktok.send_draft(cfg, db, bad, FakeClient(fail=TikTokError("TikTok dijo que no"))) is False
+    row = db.get_clip(bad)
+    assert row["draft_status"] == "error" and "dijo que no" in row["draft_error"]
+    assert db.drafts_sent_since(0) == 1   # un fallo no cuenta para el límite
+
+
+def test_a_restart_clears_drafts_left_mid_upload(setup):
+    cfg, _, _, _, db = setup
+    clip_id = add_ready_clip(cfg, db)
+    db.set_draft(clip_id, "uploading")
+    assert db.reset_draft_interrupted() == 1 and db.get_clip(clip_id)["draft_status"] == ""

@@ -24,6 +24,8 @@ class Worker:
         self._pending: set[str] = set()
         self._renders: queue.Queue[int] = queue.Queue()
         self._render_pending: set[int] = set()
+        self._sends: queue.Queue[int] = queue.Queue()
+        self._send_pending: set[int] = set()
         self._current: str | None = None
         self._cancel = threading.Event()
         self._wake = threading.Event()
@@ -69,10 +71,31 @@ class Worker:
             n += self.enqueue_render(db, clip["id"])
         return n
 
+    def enqueue_send(self, db: Database, clip_id: int) -> bool:
+        """Pide enviar la versión vertical de un clip como borrador a TikTok (de una en una)."""
+        with self._lock:
+            if clip_id in self._send_pending:
+                return False
+            self._send_pending.add(clip_id)
+        db.set_draft(clip_id, "queued")
+        self._sends.put(clip_id)
+        return True
+
+    def enqueue_sends_for_vod(self, db: Database, vod_id: str) -> int:
+        """Envía los clips listos del VOD sin pasar del límite diario de TikTok. Devuelve cuántos."""
+        left = tiktok.drafts_left(db)
+        n = 0
+        for clip in db.clips_ready_for_draft(vod_id):
+            if n >= left:
+                break
+            n += self.enqueue_send(db, clip["id"])
+        return n
+
     def sync_now(self) -> None:
         self._wake.set()
 
     def start(self) -> None:
+        threading.Thread(target=self._send_loop, name="rkm-tiktok-send", daemon=True).start()
         threading.Thread(target=self._process_loop, name="rkm-worker", daemon=True).start()
         threading.Thread(target=self._poll_loop, name="rkm-poller", daemon=True).start()
         threading.Thread(target=self._render_loop, name="rkm-render", daemon=True).start()
@@ -124,6 +147,23 @@ class Worker:
             finally:
                 with self._lock:
                     self._render_pending.discard(clip_id)
+
+    def _send_loop(self) -> None:
+        db = Database(self.cfg.db_path)
+        while not self._stop.is_set():
+            try:
+                clip_id = self._sends.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                tiktok.send_draft(self.cfg, db, clip_id)
+            except Exception:
+                log.exception("Fallo inesperado enviando el clip %s a TikTok", clip_id)
+                db.set_draft(clip_id, "error", error="Fallo inesperado; revisa el registro")
+            finally:
+                with self._lock:
+                    self._send_pending.discard(clip_id)
+            self._stop.wait(11)  # init admite 6 peticiones/min por usuario: margen de sobra
 
     def _poll_loop(self) -> None:
         db = Database(self.cfg.db_path)

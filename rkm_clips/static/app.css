@@ -236,7 +236,10 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1
 /* --- versión vertical (TikTok) --------------------------------------- */
 .clip-tt { display: flex; align-items: center; gap: 4px; padding: 0 10px 10px; }
 .clip-tt .btn { flex: 1; }
+.clip-tt.ready { flex-wrap: wrap; }
 .clip-tt.ready .btn { flex: 1; }
+.clip-tt.ready .btn[data-send], .clip-tt.ready .tt-sent, .clip-tt.ready .tt-working { flex: 1 0 100%; justify-content: center; }
+.tt-sent { display: inline-flex; align-items: center; gap: 6px; color: var(--ok, #2fb67c); font-size: 12px; font-weight: 600; padding: 4px 0; }
 .tt-working { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-2); font-size: 12px; font-weight: 600; padding: 4px 0; }
 .tt-working svg { width: 14px; height: 14px; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }

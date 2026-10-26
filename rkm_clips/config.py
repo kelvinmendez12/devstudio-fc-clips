@@ -134,7 +134,19 @@ class Config:
     tiktok_tagline: str
     tiktok_hashtags: str
 
+    # Envío a TikTok (borradores): credenciales de la app registrada en developers.tiktok.com
+    tiktok_client_key: str
+    tiktok_client_secret: str
+
     log_level: str
+
+    @property
+    def tiktok_configured(self) -> bool:
+        return bool(self.tiktok_client_key and self.tiktok_client_secret)
+
+    @property
+    def tiktok_redirect_uri(self) -> str:
+        return f"http://localhost:{self.port}/auth/tiktok/callback"
 
     @property
     def db_path(self) -> Path:
@@ -198,5 +210,7 @@ def load_config(env_file: Path | None = None) -> Config:
         tiktok_replay_slow=_float("TIKTOK_REPLAY_SLOW", 0.5),
         tiktok_tagline=_str("TIKTOK_TAGLINE", "EA FC · Clubes Pro"),
         tiktok_hashtags=_str("TIKTOK_HASHTAGS", "#EAFC #ProClubs #ClubesPro #Gaming"),
+        tiktok_client_key=_str("TIKTOK_CLIENT_KEY"),
+        tiktok_client_secret=_str("TIKTOK_CLIENT_SECRET"),
         log_level=_str("LOG_LEVEL", "INFO").upper(),
     )

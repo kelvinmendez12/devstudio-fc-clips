@@ -36,6 +36,13 @@ descargar y **copiar el texto del post** (con hashtags), y en cada VOD un botón
 Dura unos 25 s, lo que mejor funciona en vídeos de este tipo. Pon el nombre de tu equipo en *Calibrar
 marcador* para que salga en el marcador del vídeo.
 
+**Enviar a tu TikTok como borrador.** Con `TIKTOK_CLIENT_KEY` y `TIKTOK_CLIENT_SECRET` en el `.env` (de tu
+app en developers.tiktok.com, ver `.env.example`), el panel muestra **Conectar TikTok**. Después, cada clip
+vertical tiene **Enviar a TikTok** y cada VOD **Enviar a TikTok (N)**: el vídeo llega a la bandeja de tu
+app de TikTok **como borrador**; tú lo revisas, pegas el texto del post (botón de copiar) y pulsas publicar.
+La app nunca publica por ti. TikTok admite como máximo **5 borradores pendientes al día**; el panel cuenta
+los que envías y avisa cuando te quedas sin cupo.
+
 ### Si algún número no se lee
 
 Los números del 0 al 4 ya vienen calibrados. Cuando tu equipo llegue a otro (5, 6, 7…) por primera vez, el

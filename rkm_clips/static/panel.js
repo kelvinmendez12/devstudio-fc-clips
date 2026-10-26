@@ -15,6 +15,7 @@ const ICONS = {
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7z"/></svg>',
   phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
 };
 
@@ -62,6 +63,11 @@ function renderNotices() {
     n.push(`<div class="notice">Hay ${state.pending_unknowns} ${state.pending_unknowns === 1 ? "momento" : "momentos"} en que se ve el marcador pero no se reconoce el número de tu equipo: podrían faltar goles.
       <a class="btn sm primary" href="/calibrar#pendientes">Revisar</a></div>`);
   }
+  const tt = state.tiktok || {};
+  if (tt.configured && !tt.connected) {
+    n.push(`<div class="notice">Conecta tu TikTok para que los clips verticales lleguen a tu bandeja como borrador (tú solo pulsas publicar).
+      <a class="btn sm primary" href="/auth/tiktok/start">Conectar TikTok</a></div>`);
+  }
   if (state.needs_login) {
     n.push(`<div class="notice bad">${esc(state.sync_error)}
       <form method="post" action="/auth/logout" style="margin-left:auto"><button class="btn sm primary" type="submit">Reconectar con Twitch</button></form></div>`);
@@ -69,6 +75,20 @@ function renderNotices() {
     n.push(`<div class="notice bad">No se pudo consultar Twitch: ${esc(state.sync_error)}</div>`);
   }
   document.getElementById("notices").innerHTML = n.join("");
+}
+
+function draftHtml(c) {
+  const tt = state.tiktok || {};
+  const d = c.draft || {};
+  if (d.status === "queued" || d.status === "uploading") {
+    return `<span class="tt-working">${ICONS.send} ${d.status === "queued" ? "En cola…" : "Enviando…"}</span>`;
+  }
+  if (d.status === "sent") {
+    return `<span class="tt-sent" title="Ábrelo en la app de TikTok: ahí lo revisas y lo publicas">✓ En tu bandeja de TikTok</span>`;
+  }
+  if (!tt.connected) return "";
+  const err = d.status === "error" ? ` title="${esc(d.error)}"` : "";
+  return `<button class="btn sm" data-send="${c.id}"${err}>${ICONS.send} ${d.status === "error" ? "Reintentar envío" : "Enviar a TikTok"}</button>`;
 }
 
 function tiktokHtml(c) {
@@ -79,6 +99,7 @@ function tiktokHtml(c) {
       <a class="icon-btn" href="/media/tiktok/${c.id}?download=1" title="Descargar versión vertical" aria-label="Descargar versión vertical">${ICONS.download}</a>
       <button class="icon-btn" data-copy="${esc(t.caption)}" title="Copiar el texto del post" aria-label="Copiar el texto del post">${ICONS.copy}</button>
       <button class="icon-btn" data-tiktok="${c.id}" title="Rehacer la versión vertical" aria-label="Rehacer la versión vertical">${ICONS.spark}</button>
+      ${draftHtml(c)}
     </div>`;
   }
   if (t.status === "queued" || t.status === "rendering") {
@@ -120,7 +141,10 @@ function vodHtml(v) {
   else if (active) action = `<button class="btn danger" data-cancel="${v.id}">Cancelar</button>`;
   else if (v.status === "done") {
     const pending = v.clips.filter(c => !["ready", "queued", "rendering"].includes((c.tiktok || {}).status)).length;
+    const toSend = (state.tiktok || {}).connected
+      ? v.clips.filter(c => (c.tiktok || {}).status === "ready" && !["queued", "uploading", "sent"].includes((c.draft || {}).status)).length : 0;
     action = (pending ? `<button class="btn" data-tiktok-vod="${v.id}">${ICONS.phone} TikTok de todos (${pending})</button>` : "") +
+      (toSend ? `<button class="btn primary" data-send-vod="${v.id}">${ICONS.send} Enviar a TikTok (${toSend})</button>` : "") +
       `<button class="btn" data-generate="${v.id}">Regenerar</button>`;
   }
   else action = `<button class="btn primary" data-generate="${v.id}">${ICONS.spark} ${v.status === "failed" || v.status === "cancelled" ? "Reintentar" : "Generar clips"}</button>`;
@@ -158,8 +182,10 @@ function vodHtml(v) {
 function render() {
   renderNotices();
   const s = state.sync;
+  const tt = state.tiktok || {};
   document.getElementById("sync-line").textContent = state.channel
-    ? `twitch.tv/${state.channel} · actualizado ${ago(s && s.synced_at)} · se revisa cada ${state.poll_minutes} min`
+    ? `twitch.tv/${state.channel} · actualizado ${ago(s && s.synced_at)} · se revisa cada ${state.poll_minutes} min` +
+      (tt.connected ? ` · TikTok: ${tt.user} (quedan ${tt.left} de ${tt.limit} borradores hoy)` : "")
     : "Inicia sesión para ver tus VODs";
   document.getElementById("auto-toggle").checked = !!state.auto.enabled;
 
@@ -184,7 +210,8 @@ async function refresh() {
     document.getElementById("sync-line").textContent = e.message;
   }
   const busy = state && state.vods.some(v => ACTIVE.has(v.status) ||
-    v.clips.some(c => ["queued", "rendering"].includes((c.tiktok || {}).status)));
+    v.clips.some(c => ["queued", "rendering"].includes((c.tiktok || {}).status) ||
+      ["queued", "uploading"].includes((c.draft || {}).status)));
   setTimeout(refresh, busy ? 2000 : 10000);
 }
 
@@ -213,12 +240,20 @@ function waitForRestart() {
 }
 
 vodsEl.addEventListener("click", async (ev) => {
-  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-play-tt],[data-copy]");
+  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-send],[data-send-vod],[data-play-tt],[data-copy]");
   if (!el) return;
   try {
     if (el.dataset.tiktok) {
       el.disabled = true;
       await api(`/api/clips/${el.dataset.tiktok}/tiktok`, { method: "POST" });
+    } else if (el.dataset.send) {
+      el.disabled = true;
+      await api(`/api/clips/${el.dataset.send}/tiktok/send`, { method: "POST" });
+    } else if (el.dataset.sendVod) {
+      el.disabled = true;
+      const r = await api(`/api/vods/${el.dataset.sendVod}/tiktok/send`, { method: "POST" });
+      toast(r.remaining ? `Enviando ${r.queued}; ${r.remaining} quedan para mañana (TikTok admite 5 borradores al día)`
+                        : `Enviando ${r.queued} a tu TikTok…`);
     } else if (el.dataset.tiktokVod) {
       el.disabled = true;
       const r = await api(`/api/vods/${el.dataset.tiktokVod}/tiktok`, { method: "POST" });
@@ -289,5 +324,15 @@ document.getElementById("btn-sync").addEventListener("click", async () => {
   setTimeout(async () => { state = await api("/api/state"); render(); }, 2500);
 });
 document.getElementById("btn-folder").addEventListener("click", () => api("/api/open-clips-folder", { method: "POST" }));
+
+// Vuelta del login de TikTok: el servidor deja el resultado en la URL.
+(function () {
+  const q = new URLSearchParams(location.search);
+  if (q.has("tiktok") || q.has("tiktok_error")) {
+    if (q.get("tiktok_error")) toast("TikTok: " + q.get("tiktok_error"), true);
+    else toast("TikTok conectado");
+    history.replaceState(null, "", "/");
+  }
+})();
 
 refresh();

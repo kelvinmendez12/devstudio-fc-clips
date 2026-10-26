@@ -11,6 +11,7 @@ import threading
 import time
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlencode
 
 import cv2
 import numpy as np
@@ -24,6 +25,7 @@ from .downloader import stream_url
 from .pipeline import (
     CALIB_FRAME, CALIB_NUMBER_BOX, CALIB_ROI, build_reader, channel_login, effective_config, is_live_vod,
 )
+from .tiktok_api import DRAFT_LIMIT, TikTokError, new_verifier
 from .twitch import TwitchClient, TwitchError, thumbnail
 from .worker import Worker, set_auto
 
@@ -178,6 +180,55 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
         session.clear()
         return redirect(url_for("index"))
 
+    # --- conectar con TikTok (Login Kit de escritorio, con PKCE) ---------
+
+    def tiktok_back(**params):
+        return redirect(url_for("index") + ("?" + urlencode(params) if params else ""))
+
+    @app.get("/auth/tiktok/start")
+    @login_required
+    def auth_tiktok_start():
+        if not cfg.tiktok_configured:
+            return tiktok_back(tiktok_error="Faltan TIKTOK_CLIENT_KEY y TIKTOK_CLIENT_SECRET en el archivo .env")
+        state, verifier = secrets.token_urlsafe(24), new_verifier()
+        session["tiktok"] = {"state": state, "verifier": verifier}
+        return redirect(tiktok.client_for(cfg, db()).authorize_url(state, verifier))
+
+    @app.get("/auth/tiktok/callback")
+    @login_required
+    def auth_tiktok_callback():
+        pending = session.pop("tiktok", None)
+        if request.args.get("error"):
+            return tiktok_back(tiktok_error=request.args.get("error_description") or request.args["error"])
+        if not pending or not secrets.compare_digest(pending["state"], request.args.get("state", "")):
+            return tiktok_back(tiktok_error="La respuesta de TikTok no corresponde a esta sesión; inténtalo de nuevo")
+        try:
+            user = tiktok.client_for(cfg, db()).exchange_code(request.args.get("code", ""), pending["verifier"])
+        except TikTokError as exc:
+            log.warning("Login de TikTok fallido: %s", exc)
+            db().clear_tiktok()
+            return tiktok_back(tiktok_error=str(exc))
+        db().set_meta("tiktok_user", user.__dict__)
+        log.info("Cuenta de TikTok conectada: %s", user.display_name)
+        return tiktok_back(tiktok="ok")
+
+    @app.post("/auth/tiktok/logout")
+    @login_required
+    def auth_tiktok_logout():
+        db().clear_tiktok()
+        return jsonify(ok=True)
+
+    def tiktok_state() -> dict:
+        d = db()
+        user = d.get_meta("tiktok_user")
+        return {
+            "configured": cfg.tiktok_configured,
+            "connected": bool(d.get_tiktok_token() and user),
+            "user": (user or {}).get("display_name", ""),
+            "left": tiktok.drafts_left(d),
+            "limit": DRAFT_LIMIT,
+        }
+
     # --- API del panel -------------------------------------------------
 
     def vod_json(row) -> dict:
@@ -199,6 +250,7 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
                     "error": c["tiktok_error"],
                     "caption": tiktok.caption_for(cfg, db(), c),
                 },
+                "draft": {"status": c["draft_status"], "error": c["draft_error"]},
             }
             for c in db().clips_for(row["id"])
         ]
@@ -235,6 +287,7 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             needs_login=worker.needs_login,
             update={**{k: v for k, v in (d.get_meta("update") or {}).items() if k in ("available", "latest")},
                     "status": d.get_meta("update_status") or {}},
+            tiktok=tiktok_state(),
             team=d.get_meta("team") or "",
             team_label_ready=(cfg.templates_dir / "rkm_label.png").exists(),
             poll_minutes=cfg.poll_minutes,
@@ -322,6 +375,48 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
         if db().get_vod(vod_id) is None:
             abort(404)
         return jsonify(queued=worker.enqueue_renders_for_vod(db(), vod_id))
+
+    def require_tiktok():
+        """None si se puede enviar; si no, la respuesta de error."""
+        if not cfg.tiktok_configured:
+            return jsonify(error="Faltan TIKTOK_CLIENT_KEY y TIKTOK_CLIENT_SECRET en el .env"), 409
+        if not tiktok_state()["connected"]:
+            return jsonify(error="Conecta tu cuenta de TikTok primero"), 409
+        return None
+
+    @app.post("/api/clips/<int:clip_id>/tiktok/send")
+    @login_required
+    def api_tiktok_send(clip_id):
+        """Envía la versión vertical de un clip como borrador a la cuenta de TikTok conectada."""
+        row = clip_row(clip_id)
+        if (refusal := require_tiktok()) is not None:
+            return refusal
+        if row["tiktok_status"] != "ready":
+            return jsonify(error="Primero crea la versión vertical del clip"), 409
+        if row["draft_status"] in ("queued", "uploading"):
+            return jsonify(error="Ya se está enviando"), 409
+        if tiktok.drafts_left(db()) == 0:
+            return jsonify(error=tiktok_limit_message()), 409
+        worker.enqueue_send(db(), clip_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/vods/<vod_id>/tiktok/send")
+    @login_required
+    def api_vod_tiktok_send(vod_id):
+        """Envía los clips listos del VOD, hasta el límite diario de TikTok."""
+        if db().get_vod(vod_id) is None:
+            abort(404)
+        if (refusal := require_tiktok()) is not None:
+            return refusal
+        waiting = len(db().clips_ready_for_draft(vod_id))
+        if waiting and tiktok.drafts_left(db()) == 0:
+            return jsonify(error=tiktok_limit_message()), 409
+        queued = worker.enqueue_sends_for_vod(db(), vod_id)
+        return jsonify(queued=queued, remaining=waiting - queued)
+
+    def tiktok_limit_message() -> str:
+        return (f"Ya enviaste {DRAFT_LIMIT} borradores en las últimas 24 h, el máximo que admite TikTok: "
+                "publica o descarta alguno en la app de TikTok y vuelve a intentarlo mañana")
 
     @app.get("/media/thumb/<int:clip_id>")
     @login_required
@@ -608,6 +703,7 @@ def serve(cfg: Config) -> None:
     if interrupted:
         log.info("%d VODs que estaban a medias quedan como fallidos (se pueden reintentar)", interrupted)
     db.reset_tiktok_interrupted()
+    db.reset_draft_interrupted()
     db.close()
 
     worker = Worker(cfg)

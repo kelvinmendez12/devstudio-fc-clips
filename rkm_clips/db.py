@@ -81,7 +81,10 @@ class Database:
         """Columnas añadidas después de la primera versión (SQLite no tiene ADD COLUMN IF NOT EXISTS)."""
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(clips)")}
         for name, ddl in (("tiktok_path", "TEXT"), ("tiktok_status", "TEXT NOT NULL DEFAULT ''"),
-                          ("tiktok_error", "TEXT")):
+                          ("tiktok_error", "TEXT"),
+                          # Borrador en la cuenta de TikTok: '' → queued → uploading → sent | error
+                          ("draft_status", "TEXT NOT NULL DEFAULT ''"), ("draft_error", "TEXT"),
+                          ("draft_publish_id", "TEXT"), ("draft_sent_at", "REAL")):
             if name not in have:
                 try:
                     self.conn.execute(f"ALTER TABLE clips ADD COLUMN {name} {ddl}")
@@ -186,6 +189,31 @@ class Database:
             "SELECT * FROM clips WHERE vod_id = ? AND tiktok_status IN ('', 'error') ORDER BY change_s", (vod_id,)
         ).fetchall()
 
+    def set_draft(self, clip_id: int, status: str, error: str | None = None, publish_id: str | None = None) -> None:
+        sent_at = time.time() if status == "sent" else None
+        self._exec(
+            "UPDATE clips SET draft_status = ?, draft_error = ?, draft_publish_id = COALESCE(?, draft_publish_id),"
+            " draft_sent_at = COALESCE(?, draft_sent_at) WHERE id = ?",
+            (status, error[:500] if error else None, publish_id, sent_at, clip_id),
+        )
+
+    def reset_draft_interrupted(self) -> int:
+        cur = self.conn.execute("UPDATE clips SET draft_status = '' WHERE draft_status IN ('queued', 'uploading')")
+        self.conn.commit()
+        return cur.rowcount
+
+    def drafts_sent_since(self, since: float) -> int:
+        """Borradores enviados desde `since` (TikTok admite 5 pendientes cada 24 h)."""
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM clips WHERE draft_status = 'sent' AND draft_sent_at >= ?", (since,)
+        ).fetchone()[0]
+
+    def clips_ready_for_draft(self, vod_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM clips WHERE vod_id = ? AND tiktok_status = 'ready'"
+            " AND draft_status IN ('', 'error') ORDER BY change_s", (vod_id,)
+        ).fetchall()
+
     def delete_clips(self, vod_id: str) -> None:
         self._exec("DELETE FROM clips WHERE vod_id = ?", (vod_id,))
 
@@ -251,3 +279,15 @@ class Database:
     def clear_user_token(self) -> None:
         self.delete_meta("twitch_token")
         self.delete_meta("user")
+
+    # La sesión de TikTok es independiente de la de Twitch.
+    def get_tiktok_token(self) -> dict | None:
+        """{"access", "refresh", "expires_at", "refresh_expires_at", "open_id"} o None."""
+        return self.get_meta("tiktok_token")
+
+    def save_tiktok_token(self, token: dict) -> None:
+        self.set_meta("tiktok_token", token)
+
+    def clear_tiktok(self) -> None:
+        self.delete_meta("tiktok_token")
+        self.delete_meta("tiktok_user")
