@@ -242,30 +242,33 @@ def make_compilation_caption(team: str, goals: int, channel: str, hashtags: str)
     return f"¡GOLAZOS! ⚽ {goals} goles{of}{live} {hashtags}".strip()
 
 
-def _concat_path(path: Path) -> str:
-    """Ruta como la espera la lista del demuxer concat de ffmpeg (barras normales, comilla escapada)."""
-    return str(path.resolve()).replace("\\", "/").replace("'", "'\\''")
-
-
 def join_videos(ffmpeg: str, parts: list[Path], out: Path) -> float:
-    """Une vídeos verticales ya hechos (mismo formato) en uno solo y devuelve su duración."""
+    """Une vídeos verticales ya hechos en uno solo y devuelve su duración.
+
+    Se recodifica con el filtro concat en vez de empalmar los archivos: así sale un único vídeo
+    con tiempos continuos y 30 fps constantes, igual que un clip suelto. Empalmarlos sin
+    recodificar daba un archivo válido para ffmpeg que TikTok no llegaba a mostrar.
+    """
     if len(parts) < 2:
         raise VerticalError("Elige al menos dos goles para juntarlos")
+    infos = [probe(ffmpeg, p) for p in parts]
+    with_audio = all(i.has_audio for i in infos)
+    n = len(parts)
+    streams = "".join(f"[{i}:v]" + (f"[{i}:a]" if with_audio else "") for i in range(n))
+    graph = (f"{streams}concat=n={n}:v=1:a={1 if with_audio else 0}[v]" + ("[a]" if with_audio else "") + ";"
+             f"[v]fps={OUT_FPS},format=yuv420p[vout]")
+    cmd = [ffmpeg, "-y", "-loglevel", "error"]
+    for p in parts:
+        cmd += ["-i", str(p)]
+    cmd += ["-filter_complex", graph, "-map", "[vout]"]
+    if with_audio:
+        cmd += ["-map", "[a]", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-r", str(OUT_FPS), "-movflags", "+faststart"]
     tmp_out = out.with_name(out.stem + ".parte" + out.suffix)
-    with tempfile.TemporaryDirectory() as tmp:
-        listing = Path(tmp) / "lista.txt"
-        listing.write_text("".join(f"file '{_concat_path(p)}'\n" for p in parts), encoding="utf-8")
-        base = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing)]
-        # Los vídeos salen del mismo proceso y se pueden unir sin recodificar (instantáneo y sin
-        # pérdida); si por algo no encajan, se recodifica.
-        for codec in (["-c", "copy"], ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k"]):
-            result = subprocess.run(base + codec + ["-movflags", "+faststart", str(tmp_out)],
-                                    capture_output=True, creationflags=_NO_WINDOW, timeout=900)
-            if result.returncode == 0:
-                break
-            tmp_out.unlink(missing_ok=True)
-        else:
-            raise VerticalError(f"ffmpeg no pudo juntar los vídeos: {result.stderr.decode(errors='replace')[-300:]}")
+    result = subprocess.run(cmd + [str(tmp_out)], capture_output=True, creationflags=_NO_WINDOW, timeout=1800)
+    if result.returncode != 0:
+        tmp_out.unlink(missing_ok=True)
+        raise VerticalError(f"ffmpeg no pudo juntar los vídeos: {result.stderr.decode(errors='replace')[-300:]}")
     os.replace(tmp_out, out)
     return probe(ffmpeg, out).duration
 

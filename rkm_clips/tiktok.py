@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import json
 import time
 
 from .config import Config
@@ -91,7 +92,8 @@ def send_compilation(cfg: Config, db: Database, comp_id: int, client: TikTokClie
 
 
 def compilation_path(cfg: Config, vod_id: str, clip_ids: list[int]) -> Path:
-    return cfg.clips_dir / f"compilacion_{vod_id}_{'-'.join(map(str, clip_ids))}_tiktok.mp4"
+    stamp = time.strftime("%H%M%S")
+    return cfg.clips_dir / f"compilacion_{vod_id}_{'-'.join(map(str, clip_ids))}_{stamp}_tiktok.mp4"
 
 
 def compilation_caption(cfg: Config, db: Database, comp) -> str:
@@ -117,10 +119,19 @@ def make_compilation(cfg: Config, db: Database, vod_id: str, clip_ids: list[int]
     chosen.sort(key=lambda c: c["change_s"])
     ids = [c["id"] for c in chosen]
     out = compilation_path(cfg, vod_id, ids)
+    used = {r["path"] for r in db.compilations_for(vod_id)}
+    n = 1
+    while str(out) in used:  # nunca se reutiliza la ruta de una ya registrada (aunque esté oculta)
+        n += 1
+        out = out.with_name(out.stem.removesuffix("_tiktok").rsplit("-v", 1)[0] + f"-v{n}_tiktok.mp4")
     duration = join_videos(cfg.ffmpeg, [Path(c["tiktok_path"]) for c in chosen], out)
-    for old in db.compilations_for(vod_id):  # misma selección: se reemplaza en vez de duplicar
-        if old["path"] == str(out):
+    for old in db.compilations_for(vod_id):  # misma selección: la nueva sustituye a la anterior
+        if json.loads(old["clip_ids"]) != ids:
+            continue
+        Path(old["path"]).unlink(missing_ok=True)
+        if old["draft_status"] != "sent":
             db.delete_compilation(old["id"])
+        # Una ya enviada se queda (sin archivo, oculta) para que el cupo diario cuente ese envío.
     return db.add_compilation(vod_id, ids, out, duration)
 
 

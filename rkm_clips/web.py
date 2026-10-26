@@ -25,7 +25,7 @@ from .downloader import stream_url
 from .pipeline import (
     CALIB_FRAME, CALIB_NUMBER_BOX, CALIB_ROI, build_reader, channel_login, effective_config, is_live_vod,
 )
-from .tiktok_api import DRAFT_LIMIT, TikTokError, new_verifier
+from .tiktok_api import DRAFT_LIMIT, NotConnected, TikTokError, new_verifier
 from .vertical import VerticalError
 from .twitch import TwitchClient, TwitchError, thumbnail
 from .worker import Worker, set_auto
@@ -478,12 +478,23 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
     @login_required
     def api_compilation_delete(comp_id):
         row = comp_row(comp_id)
-        if row["draft_status"] == "sent":
-            # Si desaparece, el contador diario de borradores perdería ese envío.
-            return jsonify(error="Ya está en tu TikTok: no hace falta borrarla"), 409
         Path(row["path"]).unlink(missing_ok=True)
-        db().delete_compilation(comp_id)
+        if row["draft_status"] != "sent":
+            db().delete_compilation(comp_id)  # una ya enviada se queda oculta: cuenta para el cupo diario
         return jsonify(ok=True)
+
+    @app.get("/api/drafts/<kind>/<int:item_id>/status")
+    @login_required
+    def api_draft_status(kind, item_id):
+        """Pregunta a TikTok en qué estado está un borrador enviado (para diagnosticar)."""
+        row = comp_row(item_id) if kind == "comp" else clip_row(item_id) if kind == "clip" else abort(404)
+        if not row["draft_publish_id"]:
+            return jsonify(error="Este vídeo aún no se ha enviado a TikTok"), 409
+        try:
+            status, reason = tiktok.client_for(cfg, db()).draft_status(row["draft_publish_id"])
+        except (TikTokError, NotConnected) as exc:
+            return jsonify(error=str(exc)), 502
+        return jsonify(publish_id=row["draft_publish_id"], status=status, fail_reason=reason)
 
     def tiktok_limit_message() -> str:
         return (f"Ya enviaste {DRAFT_LIMIT} borradores en las últimas 24 h, el máximo que admite TikTok: "

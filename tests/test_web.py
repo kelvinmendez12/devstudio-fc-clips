@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from urllib.parse import unquote
 
 import numpy as np
@@ -563,16 +564,30 @@ def test_a_compilation_is_sent_as_one_draft_and_counts_once(joined):
     assert client.get("http://localhost/api/state").get_json()["tiktok"]["left"] == 4   # 3 goles = 1 borrador
 
 
-def test_a_sent_compilation_cannot_be_deleted_but_a_new_one_can(joined):
+def test_deleting_a_sent_compilation_keeps_the_daily_count(joined):
     _, client, _, db, ids, _ = joined
     client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
     comp = db.compilations_for("1")[0]
     assert client.post(f"http://localhost/api/compilations/{comp['id']}/delete").status_code == 200
-    assert db.compilations_for("1") == []
+    assert db.compilations_for("1") == []          # sin enviar: desaparece del todo
     client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
     comp = db.compilations_for("1")[0]
     db.set_compilation_draft(comp["id"], "sent")
-    assert client.post(f"http://localhost/api/compilations/{comp['id']}/delete").status_code == 409
+    assert client.post(f"http://localhost/api/compilations/{comp['id']}/delete").status_code == 200
+    assert not Path(comp["path"]).exists() and db.drafts_sent_since(0) == 1   # el envío sigue contando
+    shown = client.get("http://localhost/api/state").get_json()["vods"][0]["compilations"]
+    assert shown[0]["exists"] is False   # el panel la oculta
+
+
+def test_joining_again_after_sending_keeps_the_sent_count(joined):
+    _, client, _, db, ids, _ = joined
+    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
+    first = db.compilations_for("1")[0]
+    db.set_compilation_draft(first["id"], "sent")
+    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
+    rows = db.compilations_for("1")
+    assert len(rows) == 2 and db.drafts_sent_since(0) == 1
+    assert not Path(rows[0]["path"]).exists() and Path(rows[1]["path"]).exists()
 
 
 def test_regenerating_a_vod_drops_its_compilations(joined):
