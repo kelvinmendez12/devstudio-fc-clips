@@ -66,6 +66,13 @@ function renderNotices() {
     n.push(`<div class="notice">Hay ${state.pending_unknowns} ${state.pending_unknowns === 1 ? "momento" : "momentos"} en que se ve el marcador pero no se reconoce el número de tu equipo: podrían faltar goles.
       <a class="btn sm primary" href="/calibrar#pendientes">Revisar</a></div>`);
   }
+  let hideLogoNotice = false;
+  try { hideLogoNotice = localStorage.getItem("fc-logo-notice") === "1"; } catch { /* sin almacenamiento */ }
+  if (state.club && !state.club.has_logo && !hideLogoNotice && cal.label) {
+    n.push(`<div class="notice">Nuevo: sube el logo de tu club y el marcador de tus vídeos de TikTok saldrá con tu escudo y tus colores.
+      <a class="btn sm primary" href="/club">Identidad del club</a>
+      <button class="btn sm ghost" data-dismiss-logo>Ahora no</button></div>`);
+  }
   const tt = state.tiktok || {};
   if (tt.configured && !tt.connected) {
     n.push(`<div class="notice">Conecta tu TikTok para que los clips verticales lleguen a tu bandeja como borrador (tú solo pulsas publicar).
@@ -97,7 +104,7 @@ function draftHtml(c) {
 function tiktokHtml(c) {
   const t = c.tiktok || {};
   if (t.status === "ready") {
-    return `<div class="clip-tt ready">
+    return `<div class="clip-tt ready">${t.stale ? '<span class="tt-stale" title="Este vídeo se hizo con otro diseño del marcador. Rehazlo para que salga con el logo y el color actuales.">Diseño anterior</span>' : ""}
       <button class="btn sm primary" data-play-tt="${c.id}" data-title="TikTok · ${c.old} → ${c.new}" data-caption="${esc(t.caption)}">${ICONS.phone} Ver TikTok</button>
       <a class="icon-btn" href="/media/tiktok/${c.id}?download=1" title="Descargar versión vertical" aria-label="Descargar versión vertical">${ICONS.download}</a>
       <button class="icon-btn" data-copy="${esc(t.caption)}" title="Copiar el texto del post" aria-label="Copiar el texto del post">${ICONS.copy}</button>
@@ -173,7 +180,9 @@ function vodHtml(v) {
     const pending = v.clips.filter(c => !["ready", "queued", "rendering"].includes((c.tiktok || {}).status)).length;
     const toSend = (state.tiktok || {}).connected
       ? v.clips.filter(c => (c.tiktok || {}).status === "ready" && !["queued", "uploading", "sent"].includes((c.draft || {}).status)).length : 0;
-    action = (pending ? `<button class="btn" data-tiktok-vod="${v.id}">${ICONS.phone} TikTok de todos (${pending})</button>` : "") +
+    const stale = v.clips.filter(c => (c.tiktok || {}).stale).length;
+    action = (stale ? `<button class="btn" data-redo-vod="${v.id}" title="Rehace los vídeos verticales con el logo y el color actuales (los ya enviados a TikTok no se tocan)">${ICONS.spark} Rehacer con el nuevo diseño (${stale})</button>` : "") +
+      (pending ? `<button class="btn" data-tiktok-vod="${v.id}">${ICONS.phone} TikTok de todos (${pending})</button>` : "") +
       (toSend ? `<button class="btn primary" data-send-vod="${v.id}">${ICONS.send} Enviar a TikTok (${toSend})</button>` : "") +
       `<button class="btn" data-generate="${v.id}">Regenerar</button>`;
   }
@@ -192,9 +201,10 @@ function vodHtml(v) {
 
   const comps = (v.compilations || []).map(compHtml).join("");
   const mine = v.clips.filter(c => picked.has(c.id) && (c.tiktok || {}).status === "ready");
+  const mixed = new Set(mine.map(c => c.tiktok.design)).size > 1;
   const joinBar = v.status === "done" && v.clips.some(c => (c.tiktok || {}).status === "ready")
     ? `<div class="join-bar">${ICONS.join}${mine.length >= 2
-        ? `<span>${mine.length} goles marcados: se juntarán por orden de partido en un solo vídeo.</span>
+        ? `<span>${mine.length} goles marcados: se juntarán por orden de partido en un solo vídeo.${mixed ? " Ojo: no todos tienen el mismo diseño del marcador; rehazlos antes si quieres que coincidan." : ""}</span>
            <button class="btn sm primary" data-join="${v.id}">Juntar ${mine.length} en un TikTok</button>
            <button class="btn sm ghost" data-unpick="${v.id}">Quitar marcas</button>`
         : `<span>Marca «Juntar» en dos o más goles para subirlos a TikTok como un solo vídeo.</span>`}</div>` : "";
@@ -258,6 +268,11 @@ async function refresh() {
 }
 
 document.getElementById("notices").addEventListener("click", async (ev) => {
+  if (ev.target.closest("[data-dismiss-logo]")) {
+    try { localStorage.setItem("fc-logo-notice", "1"); } catch { /* sin almacenamiento */ }
+    renderNotices();
+    return;
+  }
   const btn = ev.target.closest("[data-update]");
   if (!btn) return;
   btn.disabled = true;
@@ -282,7 +297,7 @@ function waitForRestart() {
 }
 
 vodsEl.addEventListener("click", async (ev) => {
-  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-send],[data-send-vod],[data-play-tt],[data-join],[data-unpick],[data-send-comp],[data-del-comp],[data-play-comp],[data-copy]");
+  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-send],[data-send-vod],[data-redo-vod],[data-play-tt],[data-join],[data-unpick],[data-send-comp],[data-del-comp],[data-play-comp],[data-copy]");
   if (!el) return;
   try {
     if (el.dataset.tiktok) {
@@ -307,6 +322,10 @@ vodsEl.addEventListener("click", async (ev) => {
     } else if (el.dataset.playComp) {
       openPlayer(el.dataset.playComp, el.dataset.title, el.dataset.caption, "/media/compilation");
       return;
+    } else if (el.dataset.redoVod) {
+      el.disabled = true;
+      const r = await api(`/api/vods/${el.dataset.redoVod}/tiktok/redo`, { method: "POST" });
+      toast(r.queued ? `Rehaciendo ${r.queued} ${r.queued === 1 ? "vídeo" : "vídeos"} con el nuevo diseño…` : "Nada que rehacer");
     } else if (el.dataset.send) {
       el.disabled = true;
       await api(`/api/clips/${el.dataset.send}/tiktok/send`, { method: "POST" });

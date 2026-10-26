@@ -143,7 +143,7 @@ def design_id(brand: brand_mod.Brand) -> str:
 
 
 def current_design(cfg: Config, db: Database) -> str:
-    return design_id(brand_mod.load_brand(cfg, db))
+    return f"{brand_mod.current_hash(db)}.{ART_VERSION}"
 
 
 def render_clip(cfg: Config, db: Database, clip_id: int) -> Path | None:

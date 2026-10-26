@@ -71,6 +71,16 @@ class Worker:
             n += self.enqueue_render(db, clip["id"])
         return n
 
+    def enqueue_redesign_for_vod(self, db: Database, vod_id: str) -> int:
+        """Rehace con el diseño actual los verticales hechos con otro. No toca los ya enviados a TikTok."""
+        design = tiktok.current_design(self.cfg, db)
+        n = 0
+        for clip in db.clips_for(vod_id):
+            if (clip["tiktok_status"] == "ready" and clip["tiktok_design"] != design
+                    and clip["draft_status"] not in ("queued", "uploading", "sent")):
+                n += self.enqueue_render(db, clip["id"])
+        return n
+
     def enqueue_send(self, db: Database, clip_id: int) -> bool:
         """Pide enviar la versión vertical de un clip como borrador a TikTok (de una en una)."""
         with self._lock:

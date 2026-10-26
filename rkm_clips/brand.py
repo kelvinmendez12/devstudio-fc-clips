@@ -363,11 +363,22 @@ def initials(name: str) -> str:
     return "".join(w[0] for w in words[:3]).upper()
 
 
+def _hash(settings: BrandSettings, name: str, has_logo: bool) -> str:
+    key = "|".join([settings.style, settings.primary, name, str(settings.show_name),
+                    settings.logo_digest if has_logo else "-", str(settings.logo_clean)])
+    return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
 def make_brand(settings: BrandSettings, team: str, logo: Image.Image | None) -> Brand:
     name = (settings.short_name or team or "").strip()
-    key = "|".join([settings.style, settings.primary, name, str(settings.show_name),
-                    settings.logo_digest if logo is not None else "-", str(settings.logo_clean)])
-    return Brand(settings, name, Palette(settings.primary), logo, hashlib.sha1(key.encode()).hexdigest()[:12])
+    return Brand(settings, name, Palette(settings.primary), logo, _hash(settings, name, logo is not None))
+
+
+def current_hash(db: Database) -> str:
+    """Hash de la marca actual sin abrir el logo (barato: se usa en cada consulta del panel)."""
+    settings = load_settings(db)
+    name = (settings.short_name or db.get_meta("team") or "").strip()
+    return _hash(settings, name, bool(settings.logo_digest))
 
 
 def load_brand(cfg: Config, db: Database) -> Brand:

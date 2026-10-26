@@ -343,3 +343,27 @@ def test_finished_vod_gets_its_tiktok_versions_queued_only_when_auto_is_on(cfg, 
     finally:
         worker.stop()
     assert len(rendered) == expected
+
+
+def test_worker_redesign_only_redoes_what_has_another_design_and_is_not_in_tiktok(cfg):
+    from rkm_clips import brand, tiktok
+    from rkm_clips.detector import Change
+    from rkm_clips.worker import Worker
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(cfg.db_path)
+    db.upsert_vod(vod(1))
+    for n in (1, 2, 3, 4):
+        db.add_clip("1", Change(95.0, n - 1, n, 94.0), 79.0, 97.0, cfg.data_dir / f"c{n}.mp4", None)
+    a, b, c, d = [x["id"] for x in db.clips_for("1")]
+    current = tiktok.current_design(cfg, db)
+    db.set_tiktok(a, "ready", path=cfg.data_dir / "a.mp4", design=current)       # al día
+    db.set_tiktok(b, "ready", path=cfg.data_dir / "b.mp4", design="")             # de antes del diseño nuevo
+    db.set_tiktok(c, "ready", path=cfg.data_dir / "c.mp4", design="otro.1")
+    db.set_draft(c, "sent")                                                        # ya enviado a TikTok
+    # d no tiene versión vertical: tampoco se toca
+    worker = Worker(cfg)
+    assert worker.enqueue_redesign_for_vod(db, "1") == 1
+    assert db.get_clip(b)["tiktok_status"] == "queued" and db.get_clip(a)["tiktok_status"] == "ready"
+    assert db.get_clip(c)["tiktok_status"] == "ready" and db.get_clip(d)["tiktok_status"] == ""
+    brand.update_settings(db, primary="#123456")                                   # cambiar el color deja todo desfasado
+    assert worker.enqueue_redesign_for_vod(db, "1") == 1                           # a (b ya está en cola)

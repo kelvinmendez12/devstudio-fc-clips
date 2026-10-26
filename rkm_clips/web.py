@@ -243,7 +243,7 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
 
     # --- API del panel -------------------------------------------------
 
-    def vod_json(row) -> dict:
+    def vod_json(row, design: str) -> dict:
         clips = [
             {
                 "id": c["id"],
@@ -260,6 +260,10 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
                               and Path(c["tiktok_path"]).exists() else
                               ("" if c["tiktok_status"] == "ready" else c["tiktok_status"]),
                     "error": c["tiktok_error"],
+                    "design": c["tiktok_design"],
+                    # hecho con un diseño de marcador anterior al actual (y todavía se puede rehacer)
+                    "stale": c["tiktok_status"] == "ready" and c["tiktok_design"] != design
+                             and c["draft_status"] not in ("queued", "uploading", "sent"),
                     "caption": tiktok.caption_for(cfg, db(), c),
                 },
                 "draft": {"status": c["draft_status"], "error": c["draft_error"]},
@@ -303,7 +307,10 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             calibrated = {"label": True, "digits": sorted(templates.digits)}
         except Exception:
             calibrated = {"label": (cfg.templates_dir / "rkm_label.png").exists(), "digits": []}
+        design = tiktok.current_design(cfg, d)
+        club = brand_mod.load_settings(d)
         return jsonify(
+            club={"has_logo": bool(club.logo_digest), "design": design},
             channel=channel_login(cfg, d),
             auto=d.get_meta("auto") or {"enabled": False},
             sync=d.get_meta("sync"),
@@ -317,7 +324,7 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             poll_minutes=cfg.poll_minutes,
             calibrated=calibrated,
             pending_unknowns=len(d.pending_unknowns()),
-            vods=[vod_json(r) for r in d.list_vods()],
+            vods=[vod_json(r, design) for r in d.list_vods()],
         )
 
     @app.post("/api/vods/<vod_id>/generate")
@@ -391,6 +398,14 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             return jsonify(error="El clip original ya no está en la carpeta"), 409
         worker.enqueue_render(db(), clip_id)
         return jsonify(ok=True)
+
+    @app.post("/api/vods/<vod_id>/tiktok/redo")
+    @login_required
+    def api_vod_tiktok_redo(vod_id):
+        """Rehace con el diseño actual los verticales del VOD hechos con otro diseño."""
+        if db().get_vod(vod_id) is None:
+            abort(404)
+        return jsonify(queued=worker.enqueue_redesign_for_vod(db(), vod_id))
 
     @app.post("/api/vods/<vod_id>/tiktok")
     @login_required

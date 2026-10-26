@@ -18,7 +18,8 @@ class FakeWorker:
     last_sync_error = None
     needs_login = False
 
-    def __init__(self):
+    def __init__(self, cfg=None):
+        self.cfg = cfg
         self.queued = []
         self.renders = []
         self.sends = []
@@ -27,6 +28,13 @@ class FakeWorker:
         self.sends.append(clip_id)
         db.set_draft(clip_id, "queued")
         return True
+
+    def enqueue_redesign_for_vod(self, db, vod_id):
+        from rkm_clips import tiktok
+        design = tiktok.current_design(self.cfg, db)
+        return sum(self.enqueue_render(db, c["id"]) for c in db.clips_for(vod_id)
+                   if c["tiktok_status"] == "ready" and c["tiktok_design"] != design
+                   and c["draft_status"] not in ("queued", "uploading", "sent"))
 
     def enqueue_send_compilation(self, db, comp_id):
         self.sends.append(("comp", comp_id))
@@ -67,7 +75,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("TIKTOK_CLIENT_KEY", "ck")
     monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "cs")
     cfg = load_config(env_file=tmp_path / "no.env")
-    worker = FakeWorker()
+    worker = FakeWorker(cfg)
     app = create_app(cfg, worker)
     db = Database(cfg.db_path)
     db.set_meta("user", {"id": "42", "login": "kangrykelvin", "display_name": "KangryKelvin", "profile_image_url": ""})
@@ -731,3 +739,43 @@ def test_deleting_the_logo(setup):
     club = client.post("http://localhost/api/club/logo/delete").get_json()
     assert club["logo"] is None
     assert client.get("http://localhost/media/club/logo").status_code == 404
+
+
+# --- vídeos hechos con otro diseño --------------------------------------------------------------------
+
+def make_ready(cfg, db, new, design):
+    clip_id = add_ready_clip(cfg, db, new=new)
+    db.set_tiktok(clip_id, "ready", design=design)
+    return clip_id
+
+
+def test_videos_made_with_another_design_are_flagged_and_can_be_redone(setup):
+    from rkm_clips import tiktok
+    cfg, _, client, worker, db = setup
+    login(client)
+    current = tiktok.current_design(cfg, db)
+    fresh, old, sent = make_ready(cfg, db, 1, current), make_ready(cfg, db, 2, ""), make_ready(cfg, db, 3, "viejo.0")
+    db.set_draft(sent, "sent")                        # ya está en TikTok: no se puede cambiar
+    clips = {c["id"]: c for c in client.get("http://localhost/api/state").get_json()["vods"][0]["clips"]}
+    assert [clips[i]["tiktok"]["stale"] for i in (fresh, old, sent)] == [False, True, False]
+    assert client.post("http://localhost/api/vods/1/tiktok/redo").get_json() == {"queued": 1}
+    assert worker.renders == [old]
+
+
+def test_changing_the_club_color_makes_existing_videos_stale(setup):
+    from rkm_clips import tiktok
+    cfg, _, client, _, db = setup
+    login(client)
+    clip = make_ready(cfg, db, 1, tiktok.current_design(cfg, db))
+    state = lambda: client.get("http://localhost/api/state").get_json()
+    assert state()["vods"][0]["clips"][0]["tiktok"]["stale"] is False
+    client.post("http://localhost/api/club", json={"primary": "#1E88E5"})
+    assert state()["vods"][0]["clips"][0]["tiktok"]["stale"] is True
+    assert state()["club"]["has_logo"] is False
+    assert db.get_clip(clip)["tiktok_design"] != state()["club"]["design"]
+
+
+def test_redo_for_an_unknown_vod_is_404(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    assert client.post("http://localhost/api/vods/999/tiktok/redo").status_code == 404

@@ -280,3 +280,5 @@ dialog.player.vertical video { max-height: 78vh; }
 .swatch { all: unset; width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; box-sizing: border-box; }
 .swatch:hover, .swatch:focus-visible { border-color: #fff; }
 @media (max-width: 900px) { .club { grid-template-columns: 1fr; } }
+
+.tt-stale { flex: 1 0 100%; font-size: 11px; font-weight: 600; color: #e8c872; background: rgba(232,200,114,.1); border: 1px solid rgba(232,200,114,.3); border-radius: 6px; padding: 2px 8px; text-align: center; }
