@@ -245,3 +245,17 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1
 @keyframes pulse { 50% { opacity: .35; } }
 dialog.player.vertical { max-width: min(430px, 94vw); }
 dialog.player.vertical video { max-height: 78vh; }
+
+/* Juntar varios goles en un solo vídeo */
+.pick { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted, #9aa); cursor: pointer; padding: 0 4px; }
+.pick input { accent-color: var(--accent, #9147ff); width: 15px; height: 15px; margin: 0; cursor: pointer; }
+.join-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--line, #26262e); font-size: 13px; color: var(--muted, #9aa); }
+.join-bar svg { width: 18px; height: 18px; flex: none; }
+.join-bar span { flex: 1 1 260px; }
+.comps { display: grid; gap: 8px; padding: 0 14px 14px; }
+.comp { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--accent, #9147ff); border-radius: 12px; background: rgba(145, 71, 255, .08); }
+.comp-info { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; }
+.comp-info svg { width: 22px; height: 22px; flex: none; color: var(--accent-2, #b98cff); }
+.comp-info b { display: block; font-size: 14px; }
+.comp-info span { font-size: 12px; color: var(--muted, #9aa); }
+.comp-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

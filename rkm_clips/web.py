@@ -26,6 +26,7 @@ from .pipeline import (
     CALIB_FRAME, CALIB_NUMBER_BOX, CALIB_ROI, build_reader, channel_login, effective_config, is_live_vod,
 )
 from .tiktok_api import DRAFT_LIMIT, TikTokError, new_verifier
+from .vertical import VerticalError
 from .twitch import TwitchClient, TwitchError, thumbnail
 from .worker import Worker, set_auto
 
@@ -254,6 +255,17 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             }
             for c in db().clips_for(row["id"])
         ]
+        compilations = [
+            {
+                "id": k["id"],
+                "goals": k["goals"],
+                "duration": format_ts(k["duration_s"]),
+                "exists": Path(k["path"]).exists(),
+                "caption": tiktok.compilation_caption(cfg, db(), k),
+                "draft": {"status": k["draft_status"], "error": k["draft_error"]},
+            }
+            for k in db().compilations_for(row["id"])
+        ]
         return {
             "id": row["id"],
             "title": row["title"],
@@ -268,6 +280,7 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             "live": is_live_vod(db(), row["id"]),
             "unknowns": db().unknowns_for(row["id"]),
             "clips": clips,
+            "compilations": compilations,
         }
 
     @app.get("/api/state")
@@ -413,6 +426,64 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             return jsonify(error=tiktok_limit_message()), 409
         queued = worker.enqueue_sends_for_vod(db(), vod_id)
         return jsonify(queued=queued, remaining=waiting - queued)
+
+    # --- compilaciones: varios goles en un solo vídeo / borrador ----------
+
+    def comp_row(comp_id: int):
+        row = db().get_compilation(comp_id)
+        if row is None:
+            abort(404)
+        return row
+
+    @app.post("/api/vods/<vod_id>/compilations")
+    @login_required
+    def api_compilation_create(vod_id):
+        if db().get_vod(vod_id) is None:
+            abort(404)
+        try:
+            ids = [int(i) for i in (request.get_json(silent=True) or {}).get("clip_ids", [])]
+        except (TypeError, ValueError):
+            return jsonify(error="Selección no válida"), 400
+        try:
+            comp_id = tiktok.make_compilation(cfg, db(), vod_id, ids)
+        except (TikTokError, VerticalError) as exc:
+            return jsonify(error=str(exc)), 409
+        return jsonify(ok=True, id=comp_id)
+
+    @app.get("/media/compilation/<int:comp_id>")
+    @login_required
+    def media_compilation(comp_id):
+        path = Path(comp_row(comp_id)["path"])
+        if not path.exists():
+            abort(404)
+        return send_file(path, mimetype="video/mp4", conditional=True,
+                         as_attachment=request.args.get("download") == "1", download_name=path.name)
+
+    @app.post("/api/compilations/<int:comp_id>/send")
+    @login_required
+    def api_compilation_send(comp_id):
+        row = comp_row(comp_id)
+        if (refusal := require_tiktok()) is not None:
+            return refusal
+        if not Path(row["path"]).exists():
+            return jsonify(error="El vídeo ya no está en la carpeta; vuelve a juntar los goles"), 409
+        if row["draft_status"] in ("queued", "uploading"):
+            return jsonify(error="Ya se está enviando"), 409
+        if tiktok.drafts_left(db()) == 0:
+            return jsonify(error=tiktok_limit_message()), 409
+        worker.enqueue_send_compilation(db(), comp_id)
+        return jsonify(ok=True)
+
+    @app.post("/api/compilations/<int:comp_id>/delete")
+    @login_required
+    def api_compilation_delete(comp_id):
+        row = comp_row(comp_id)
+        if row["draft_status"] == "sent":
+            # Si desaparece, el contador diario de borradores perdería ese envío.
+            return jsonify(error="Ya está en tu TikTok: no hace falta borrarla"), 409
+        Path(row["path"]).unlink(missing_ok=True)
+        db().delete_compilation(comp_id)
+        return jsonify(ok=True)
 
     def tiktok_limit_message() -> str:
         return (f"Ya enviaste {DRAFT_LIMIT} borradores en las últimas 24 h, el máximo que admite TikTok: "

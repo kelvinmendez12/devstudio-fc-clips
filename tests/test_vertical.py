@@ -126,3 +126,48 @@ def test_database_gains_tiktok_columns_when_opening_an_old_file(tmp_path):
     row = db.conn.execute("SELECT * FROM clips").fetchone()
     assert row["tiktok_status"] == "" and row["tiktok_path"] is None
     Database(path).close()   # abrirla otra vez no falla por columnas repetidas
+
+
+def _tiny_vertical(path, color, seconds=1):
+    """Vídeo de prueba con el mismo formato que las versiones verticales (1080x1920, h264 + aac)."""
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", f"color=c={color}:s=1080x1920:r=30:d={seconds}",
+         "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(path)],
+        check=True)
+    return path
+
+
+@needs_ffmpeg
+def test_join_videos_concatenates_in_order(tmp_path):
+    from rkm_clips.vertical import join_videos
+    a = _tiny_vertical(tmp_path / "a.mp4", "red")
+    b = _tiny_vertical(tmp_path / "b.mp4", "blue", seconds=2)
+    out = tmp_path / "salida" / "junto.mp4"
+    out.parent.mkdir()
+    duration = join_videos("ffmpeg", [a, b], out)
+    assert 2.7 < duration < 3.4
+    assert not list(out.parent.glob("*.parte.mp4"))   # sin restos del archivo temporal
+
+
+@needs_ffmpeg
+def test_join_videos_handles_odd_paths(tmp_path):
+    from rkm_clips.vertical import join_videos
+    folder = tmp_path / "Vídeos d'équipe"
+    folder.mkdir()
+    a = _tiny_vertical(folder / "a b.mp4", "red")
+    b = _tiny_vertical(folder / "b.mp4", "green")
+    assert join_videos("ffmpeg", [a, b], tmp_path / "out.mp4") > 1.5
+
+
+def test_join_needs_two_videos(tmp_path):
+    from rkm_clips.vertical import VerticalError, join_videos
+    with pytest.raises(VerticalError):
+        join_videos("ffmpeg", [tmp_path / "a.mp4"], tmp_path / "out.mp4")
+
+
+def test_compilation_caption_counts_goals():
+    from rkm_clips.vertical import make_compilation_caption
+    text = make_compilation_caption("RKM", 3, "kangrykelvin", "#EAFC")
+    assert text.startswith("¡GOLAZOS!") and "3 goles de RKM" in text and "twitch.tv/kangrykelvin" in text

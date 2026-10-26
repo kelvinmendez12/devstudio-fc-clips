@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS meta (
     key           TEXT PRIMARY KEY,
     value         TEXT NOT NULL
 );
+-- Varios goles de un VOD unidos en un solo vídeo vertical (un solo borrador de TikTok).
+CREATE TABLE IF NOT EXISTS compilations (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    vod_id           TEXT NOT NULL REFERENCES vods(id),
+    clip_ids         TEXT NOT NULL,
+    goals            INTEGER NOT NULL,
+    duration_s       REAL NOT NULL DEFAULT 0,
+    path             TEXT NOT NULL,
+    draft_status     TEXT NOT NULL DEFAULT '',
+    draft_error      TEXT,
+    draft_publish_id TEXT,
+    draft_sent_at    REAL,
+    created_at       TEXT NOT NULL
+);
 -- Momentos con "RKM" visible y número no reconocido (dígito sin plantilla): posibles goles perdidos.
 CREATE TABLE IF NOT EXISTS unknowns (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,14 +212,19 @@ class Database:
         )
 
     def reset_draft_interrupted(self) -> int:
-        cur = self.conn.execute("UPDATE clips SET draft_status = '' WHERE draft_status IN ('queued', 'uploading')")
+        n = 0
+        for table in ("clips", "compilations"):
+            cur = self.conn.execute(f"UPDATE {table} SET draft_status = '' WHERE draft_status IN ('queued', 'uploading')")
+            n += cur.rowcount
         self.conn.commit()
-        return cur.rowcount
+        return n
 
     def drafts_sent_since(self, since: float) -> int:
         """Borradores enviados desde `since` (TikTok admite 5 pendientes cada 24 h)."""
         return self.conn.execute(
-            "SELECT COUNT(*) FROM clips WHERE draft_status = 'sent' AND draft_sent_at >= ?", (since,)
+            "SELECT (SELECT COUNT(*) FROM clips WHERE draft_status = 'sent' AND draft_sent_at >= ?)"
+            " + (SELECT COUNT(*) FROM compilations WHERE draft_status = 'sent' AND draft_sent_at >= ?)",
+            (since, since),
         ).fetchone()[0]
 
     def clips_ready_for_draft(self, vod_id: str) -> list[sqlite3.Row]:
@@ -215,7 +234,37 @@ class Database:
         ).fetchall()
 
     def delete_clips(self, vod_id: str) -> None:
+        # Las compilaciones apuntan a clips concretos: si se regeneran, dejan de valer.
+        self._exec("DELETE FROM compilations WHERE vod_id = ?", (vod_id,))
         self._exec("DELETE FROM clips WHERE vod_id = ?", (vod_id,))
+
+    # --- compilaciones -------------------------------------------------
+
+    def add_compilation(self, vod_id: str, clip_ids: list[int], path: Path, duration_s: float) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO compilations (vod_id, clip_ids, goals, duration_s, path, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (vod_id, json.dumps(clip_ids), len(clip_ids), duration_s, str(path), _now()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_compilation(self, comp_id: int) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+
+    def compilations_for(self, vod_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM compilations WHERE vod_id = ? ORDER BY id", (vod_id,)).fetchall()
+
+    def delete_compilation(self, comp_id: int) -> None:
+        self._exec("DELETE FROM compilations WHERE id = ?", (comp_id,))
+
+    def set_compilation_draft(self, comp_id: int, status: str, error: str | None = None,
+                              publish_id: str | None = None) -> None:
+        sent_at = time.time() if status == "sent" else None
+        self._exec(
+            "UPDATE compilations SET draft_status = ?, draft_error = ?,"
+            " draft_publish_id = COALESCE(?, draft_publish_id), draft_sent_at = COALESCE(?, draft_sent_at) WHERE id = ?",
+            (status, error[:500] if error else None, publish_id, sent_at, comp_id),
+        )
 
     def clips_for(self, vod_id: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM clips WHERE vod_id = ? ORDER BY change_s", (vod_id,)).fetchall()

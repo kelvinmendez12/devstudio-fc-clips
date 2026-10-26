@@ -16,10 +16,13 @@ const ICONS = {
   spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7z"/></svg>',
   phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>',
+  join: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><path d="M10 12h4"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
 };
 
 let state = null;
+const picked = new Set();   // goles marcados para juntar en un solo vídeo
 const vodsEl = document.getElementById("vods");
 
 function fmtDate(iso) {
@@ -109,6 +112,32 @@ function tiktokHtml(c) {
   return `<div class="clip-tt"><button class="btn sm" data-tiktok="${c.id}"${err}>${ICONS.phone} ${t.status === "error" ? "Reintentar TikTok" : "Crear TikTok"}</button></div>`;
 }
 
+function compDraftHtml(k) {
+  const d = k.draft || {};
+  if (d.status === "queued" || d.status === "uploading") {
+    return `<span class="tt-working">${ICONS.send} ${d.status === "queued" ? "En cola…" : "Enviando…"}</span>`;
+  }
+  if (d.status === "sent") return `<span class="tt-sent">✓ En tu bandeja de TikTok</span>`;
+  if (!(state.tiktok || {}).connected) return "";
+  const err = d.status === "error" ? ` title="${esc(d.error)}"` : "";
+  return `<button class="btn sm primary" data-send-comp="${k.id}"${err}>${ICONS.send} ${d.status === "error" ? "Reintentar envío" : "Enviar a TikTok"}</button>`;
+}
+
+function compHtml(k) {
+  if (!k.exists) return "";
+  const title = `${k.goals} goles juntos · ${k.duration}`;
+  return `<div class="comp">
+    <div class="comp-info">${ICONS.join}<div><b>${k.goals} goles en un solo vídeo</b><span>${esc(k.duration)} · listo para publicar</span></div></div>
+    <div class="comp-actions">
+      <button class="btn sm" data-play-comp="${k.id}" data-title="${esc(title)}" data-caption="${esc(k.caption)}">${ICONS.phone} Ver</button>
+      <a class="icon-btn" href="/media/compilation/${k.id}?download=1" title="Descargar" aria-label="Descargar">${ICONS.download}</a>
+      <button class="icon-btn" data-copy="${esc(k.caption)}" title="Copiar el texto del post" aria-label="Copiar el texto del post">${ICONS.copy}</button>
+      ${(k.draft || {}).status === "sent" ? "" : `<button class="icon-btn" data-del-comp="${k.id}" title="Borrar este vídeo" aria-label="Borrar este vídeo">${ICONS.trash}</button>`}
+      ${compDraftHtml(k)}
+    </div>
+  </div>`;
+}
+
 function clipHtml(c) {
   const thumb = c.has_thumb ? `<img src="/media/thumb/${c.id}" alt="" loading="lazy">` : "";
   return `<div class="clip">
@@ -119,6 +148,7 @@ function clipHtml(c) {
         <div class="clip-time">${esc(c.at)} · ${c.duration}s</div>
       </div>
       <div class="actions">
+        ${(c.tiktok || {}).status === "ready" ? `<label class="pick" title="Marca varios goles para juntarlos en un solo TikTok"><input type="checkbox" data-pick="${c.id}"${picked.has(c.id) ? " checked" : ""}> Juntar</label>` : ""}
         <a class="icon-btn" href="/media/clip/${c.id}?download=1" title="Descargar" aria-label="Descargar">${ICONS.download}</a>
         <button class="icon-btn" data-reveal="${c.id}" title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">${ICONS.folder}</button>
       </div>
@@ -160,6 +190,15 @@ function vodHtml(v) {
       : `<div class="clips-empty">No se detectó ningún gol de tu equipo en este VOD. Si sí hubo goles, revisa la calibración.</div>`;
   }
 
+  const comps = (v.compilations || []).map(compHtml).join("");
+  const mine = v.clips.filter(c => picked.has(c.id) && (c.tiktok || {}).status === "ready");
+  const joinBar = v.status === "done" && v.clips.some(c => (c.tiktok || {}).status === "ready")
+    ? `<div class="join-bar">${ICONS.join}${mine.length >= 2
+        ? `<span>${mine.length} goles marcados: se juntarán por orden de partido en un solo vídeo.</span>
+           <button class="btn sm primary" data-join="${v.id}">Juntar ${mine.length} en un TikTok</button>
+           <button class="btn sm ghost" data-unpick="${v.id}">Quitar marcas</button>`
+        : `<span>Marca «Juntar» en dos o más goles para subirlos a TikTok como un solo vídeo.</span>`}</div>` : "";
+
   return `<article class="vod" id="vod-${v.id}">
     <div class="vod-main">
       <a class="thumb" href="${esc(v.url)}" target="_blank" rel="noopener">
@@ -176,6 +215,8 @@ function vodHtml(v) {
       <div class="vod-actions">${action}</div>
     </div>
     ${clips}
+    ${joinBar}
+    ${comps ? `<div class="comps">${comps}</div>` : ""}
   </article>`;
 }
 
@@ -211,7 +252,8 @@ async function refresh() {
   }
   const busy = state && state.vods.some(v => ACTIVE.has(v.status) ||
     v.clips.some(c => ["queued", "rendering"].includes((c.tiktok || {}).status) ||
-      ["queued", "uploading"].includes((c.draft || {}).status)));
+      ["queued", "uploading"].includes((c.draft || {}).status)) ||
+    (v.compilations || []).some(k => ["queued", "uploading"].includes((k.draft || {}).status)));
   setTimeout(refresh, busy ? 2000 : 10000);
 }
 
@@ -240,12 +282,31 @@ function waitForRestart() {
 }
 
 vodsEl.addEventListener("click", async (ev) => {
-  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-send],[data-send-vod],[data-play-tt],[data-copy]");
+  const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-send],[data-send-vod],[data-play-tt],[data-join],[data-unpick],[data-send-comp],[data-del-comp],[data-play-comp],[data-copy]");
   if (!el) return;
   try {
     if (el.dataset.tiktok) {
       el.disabled = true;
       await api(`/api/clips/${el.dataset.tiktok}/tiktok`, { method: "POST" });
+    } else if (el.dataset.join) {
+      const vod = state.vods.find(v => v.id === el.dataset.join);
+      const ids = vod.clips.filter(c => picked.has(c.id)).map(c => c.id);
+      el.disabled = true;
+      toast("Juntando los goles…");
+      await api(`/api/vods/${vod.id}/compilations`, { method: "POST", body: { clip_ids: ids } });
+      ids.forEach(i => picked.delete(i));
+      toast("Listo: lo tienes debajo de los goles");
+    } else if (el.dataset.unpick) {
+      state.vods.find(v => v.id === el.dataset.unpick).clips.forEach(c => picked.delete(c.id));
+    } else if (el.dataset.sendComp) {
+      el.disabled = true;
+      await api(`/api/compilations/${el.dataset.sendComp}/send`, { method: "POST" });
+    } else if (el.dataset.delComp) {
+      if (!confirm("¿Borrar este vídeo juntado? Los goles originales no se tocan.")) return;
+      await api(`/api/compilations/${el.dataset.delComp}/delete`, { method: "POST" });
+    } else if (el.dataset.playComp) {
+      openPlayer(el.dataset.playComp, el.dataset.title, el.dataset.caption, "/media/compilation");
+      return;
     } else if (el.dataset.send) {
       el.disabled = true;
       await api(`/api/clips/${el.dataset.send}/tiktok/send`, { method: "POST" });
@@ -301,9 +362,9 @@ async function copyText(text) {
 }
 
 // caption presente = versión vertical de TikTok (/media/tiktok); si no, el clip normal.
-function openPlayer(id, title, caption) {
+function openPlayer(id, title, caption, source) {
   const vertical = caption !== undefined;
-  const base = vertical ? "/media/tiktok" : "/media/clip";
+  const base = source || (vertical ? "/media/tiktok" : "/media/clip");
   player.classList.toggle("vertical", vertical);
   video.src = `${base}/${id}`;
   document.getElementById("player-title").textContent = title;
@@ -317,6 +378,14 @@ playerCopy.addEventListener("click", () => copyText(playerCaption));
 player.addEventListener("close", () => { video.pause(); video.removeAttribute("src"); video.load(); });
 player.addEventListener("click", (e) => { if (e.target === player) player.close(); });
 document.getElementById("player-close").addEventListener("click", () => player.close());
+
+vodsEl.addEventListener("change", (ev) => {
+  const box = ev.target.closest("[data-pick]");
+  if (!box) return;
+  const id = Number(box.dataset.pick);
+  if (box.checked) picked.add(id); else picked.delete(id);
+  render();
+});
 
 document.getElementById("btn-sync").addEventListener("click", async () => {
   await api("/api/sync", { method: "POST" });

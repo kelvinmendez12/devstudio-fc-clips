@@ -40,7 +40,10 @@ marcador* para que salga en el marcador del vídeo.
 app en developers.tiktok.com, ver `.env.example`), el panel muestra **Conectar TikTok**. Después, cada clip
 vertical tiene **Enviar a TikTok** y cada VOD **Enviar a TikTok (N)**: el vídeo llega a la bandeja de tu
 app de TikTok **como borrador**; tú lo revisas, pegas el texto del post (botón de copiar) y pulsas publicar.
-La app nunca publica por ti. TikTok admite como máximo **5 borradores pendientes al día**; el panel cuenta
+**Varios goles en un solo vídeo.** En cada gol con versión vertical hay una casilla **Juntar**: marca dos o
+más y pulsa **Juntar N en un TikTok**. La app los une por orden de partido en un solo vídeo (instantáneo, sin
+perder calidad) y lo deja debajo de los goles, con su texto de post y su botón **Enviar a TikTok**; así solo
+tienes que pulsar publicar, sin descargar ni editar nada, y cuenta como un único borrador. La app nunca publica por ti. TikTok admite como máximo **5 borradores pendientes al día**; el panel cuenta
 los que envías y avisa cuando te quedas sin cupo.
 
 ### Si algún número no se lee

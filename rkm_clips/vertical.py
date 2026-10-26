@@ -236,6 +236,40 @@ def make_caption(team: str, new: int, channel: str, hashtags: str) -> str:
     return f"¡GOOOL! ⚽ Gol {new}{of}{live} {hashtags}".strip()
 
 
+def make_compilation_caption(team: str, goals: int, channel: str, hashtags: str) -> str:
+    of = f" de {team}" if team else ""
+    live = f" · en directo en twitch.tv/{channel}" if channel else ""
+    return f"¡GOLAZOS! ⚽ {goals} goles{of}{live} {hashtags}".strip()
+
+
+def _concat_path(path: Path) -> str:
+    """Ruta como la espera la lista del demuxer concat de ffmpeg (barras normales, comilla escapada)."""
+    return str(path.resolve()).replace("\\", "/").replace("'", "'\\''")
+
+
+def join_videos(ffmpeg: str, parts: list[Path], out: Path) -> float:
+    """Une vídeos verticales ya hechos (mismo formato) en uno solo y devuelve su duración."""
+    if len(parts) < 2:
+        raise VerticalError("Elige al menos dos goles para juntarlos")
+    tmp_out = out.with_name(out.stem + ".parte" + out.suffix)
+    with tempfile.TemporaryDirectory() as tmp:
+        listing = Path(tmp) / "lista.txt"
+        listing.write_text("".join(f"file '{_concat_path(p)}'\n" for p in parts), encoding="utf-8")
+        base = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing)]
+        # Los vídeos salen del mismo proceso y se pueden unir sin recodificar (instantáneo y sin
+        # pérdida); si por algo no encajan, se recodifica.
+        for codec in (["-c", "copy"], ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k"]):
+            result = subprocess.run(base + codec + ["-movflags", "+faststart", str(tmp_out)],
+                                    capture_output=True, creationflags=_NO_WINDOW, timeout=900)
+            if result.returncode == 0:
+                break
+            tmp_out.unlink(missing_ok=True)
+        else:
+            raise VerticalError(f"ffmpeg no pudo juntar los vídeos: {result.stderr.decode(errors='replace')[-300:]}")
+    os.replace(tmp_out, out)
+    return probe(ffmpeg, out).duration
+
+
 # --- ffmpeg ------------------------------------------------------------------------------------
 
 def build_filter(src: Probe, a_keys, b_keys, a_win, b_win, opts: VerticalOptions, with_audio: bool) -> str:

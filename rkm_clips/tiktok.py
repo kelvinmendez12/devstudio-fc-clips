@@ -11,9 +11,11 @@ from .config import Config
 from .db import Database
 from .pipeline import channel_login
 from .tiktok_api import DRAFT_LIMIT, DRAFT_WINDOW_S, NotConnected, TikTokClient, TikTokError
-from .vertical import VerticalOptions, make_caption, render_vertical
+from .vertical import VerticalOptions, join_videos, make_caption, make_compilation_caption, render_vertical
 
 log = logging.getLogger(__name__)
+
+MAX_COMPILATION = 10
 
 
 def options(cfg: Config) -> VerticalOptions:
@@ -45,30 +47,81 @@ def drafts_left(db: Database) -> int:
     return max(0, DRAFT_LIMIT - db.drafts_sent_since(time.time() - DRAFT_WINDOW_S))
 
 
+def _upload(client: TikTokClient, path: Path, set_draft) -> bool:
+    """Sube un vídeo como borrador y espera a que esté en la bandeja; `set_draft` guarda el estado."""
+    set_draft("uploading")
+    try:
+        if not path.is_file():
+            raise TikTokError("El vídeo vertical ya no está en la carpeta")
+        publish_id = client.upload_draft(path)
+        set_draft("uploading", publish_id=publish_id)
+        client.wait_for_inbox(publish_id)
+    except NotConnected as exc:
+        set_draft("error", error=str(exc))
+        return False
+    except Exception as exc:
+        log.warning("No se pudo enviar %s a TikTok: %s", path.name, exc)
+        set_draft("error", error=str(exc))
+        return False
+    set_draft("sent")
+    log.info("%s enviado a TikTok como borrador", path.name)
+    return True
+
+
 def send_draft(cfg: Config, db: Database, clip_id: int, client: TikTokClient | None = None) -> bool:
     """Sube la versión vertical de un clip como borrador a la cuenta de TikTok conectada."""
     clip = db.get_clip(clip_id)
     if clip is None:
         return False
     client = client or client_for(cfg, db)
-    db.set_draft(clip_id, "uploading")
-    try:
-        path = Path(clip["tiktok_path"] or "")
-        if clip["tiktok_status"] != "ready" or not path.is_file():
-            raise TikTokError("Primero hay que crear la versión vertical del clip")
-        publish_id = client.upload_draft(path)
-        db.set_draft(clip_id, "uploading", publish_id=publish_id)
-        client.wait_for_inbox(publish_id)
-    except NotConnected as exc:
-        db.set_draft(clip_id, "error", error=str(exc))
+    set_draft = lambda status, **kw: db.set_draft(clip_id, status, **kw)  # noqa: E731
+    if clip["tiktok_status"] != "ready" or not clip["tiktok_path"]:
+        set_draft("error", error="Primero hay que crear la versión vertical del clip")
         return False
-    except Exception as exc:
-        log.warning("No se pudo enviar el clip %s a TikTok: %s", clip_id, exc)
-        db.set_draft(clip_id, "error", error=str(exc))
+    return _upload(client, Path(clip["tiktok_path"]), set_draft)
+
+
+def send_compilation(cfg: Config, db: Database, comp_id: int, client: TikTokClient | None = None) -> bool:
+    comp = db.get_compilation(comp_id)
+    if comp is None:
         return False
-    db.set_draft(clip_id, "sent")
-    log.info("Clip %s enviado a TikTok como borrador", clip_id)
-    return True
+    client = client or client_for(cfg, db)
+    return _upload(client, Path(comp["path"]),
+                   lambda status, **kw: db.set_compilation_draft(comp_id, status, **kw))
+
+
+def compilation_path(cfg: Config, vod_id: str, clip_ids: list[int]) -> Path:
+    return cfg.clips_dir / f"compilacion_{vod_id}_{'-'.join(map(str, clip_ids))}_tiktok.mp4"
+
+
+def compilation_caption(cfg: Config, db: Database, comp) -> str:
+    return make_compilation_caption(db.get_meta("team") or "", comp["goals"], channel_login(cfg, db) or "",
+                                    cfg.tiktok_hashtags)
+
+
+def make_compilation(cfg: Config, db: Database, vod_id: str, clip_ids: list[int]) -> int:
+    """Junta las versiones verticales de varios goles (en orden de partido) en un solo vídeo."""
+    clips = {c["id"]: c for c in db.clips_for(vod_id)}
+    chosen = []
+    for cid in set(clip_ids):
+        clip = clips.get(cid)
+        if clip is None:
+            raise TikTokError("Uno de los goles no es de este VOD")
+        if clip["tiktok_status"] != "ready" or not clip["tiktok_path"] or not Path(clip["tiktok_path"]).is_file():
+            raise TikTokError("Todos los goles elegidos necesitan su versión vertical (créala primero)")
+        chosen.append(clip)
+    if len(chosen) < 2:
+        raise TikTokError("Elige al menos dos goles para juntarlos")
+    if len(chosen) > MAX_COMPILATION:
+        raise TikTokError(f"Como mucho {MAX_COMPILATION} goles por vídeo")
+    chosen.sort(key=lambda c: c["change_s"])
+    ids = [c["id"] for c in chosen]
+    out = compilation_path(cfg, vod_id, ids)
+    duration = join_videos(cfg.ffmpeg, [Path(c["tiktok_path"]) for c in chosen], out)
+    for old in db.compilations_for(vod_id):  # misma selección: se reemplaza en vez de duplicar
+        if old["path"] == str(out):
+            db.delete_compilation(old["id"])
+    return db.add_compilation(vod_id, ids, out, duration)
 
 
 def render_clip(cfg: Config, db: Database, clip_id: int) -> Path | None:
