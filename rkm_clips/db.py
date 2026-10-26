@@ -96,6 +96,8 @@ class Database:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(clips)")}
         for name, ddl in (("tiktok_path", "TEXT"), ("tiktok_status", "TEXT NOT NULL DEFAULT ''"),
                           ("tiktok_error", "TEXT"),
+                          # con qué diseño (marca + versión del dibujo) se hizo el vertical; '' = antes del nuevo diseño
+                          ("tiktok_design", "TEXT NOT NULL DEFAULT ''"),
                           # Borrador en la cuenta de TikTok: '' → queued → uploading → sent | error
                           ("draft_status", "TEXT NOT NULL DEFAULT ''"), ("draft_error", "TEXT"),
                           ("draft_publish_id", "TEXT"), ("draft_sent_at", "REAL")):
@@ -186,10 +188,12 @@ class Database:
         )
 
     # Versión vertical (TikTok): '' → queued → rendering → ready | error
-    def set_tiktok(self, clip_id: int, status: str, path: Path | None = None, error: str | None = None) -> None:
+    def set_tiktok(self, clip_id: int, status: str, path: Path | None = None, error: str | None = None,
+                   design: str | None = None) -> None:
         self._exec(
-            "UPDATE clips SET tiktok_status = ?, tiktok_path = COALESCE(?, tiktok_path), tiktok_error = ? WHERE id = ?",
-            (status, str(path) if path else None, error[:500] if error else None, clip_id),
+            "UPDATE clips SET tiktok_status = ?, tiktok_path = COALESCE(?, tiktok_path), tiktok_error = ?,"
+            " tiktok_design = COALESCE(?, tiktok_design) WHERE id = ?",
+            (status, str(path) if path else None, error[:500] if error else None, design, clip_id),
         )
 
     def reset_tiktok_interrupted(self) -> int:

@@ -257,6 +257,8 @@ def test_render_clip_stores_ready_or_error(cfg, tmp_path, monkeypatch):
     out = tiktok.render_clip(cfg, db, clip_id)
     assert out.name == "c_tiktok.mp4" and db.get_clip(clip_id)["tiktok_status"] == "ready"
     assert seen["goal_s"] == pytest.approx(15.0) and (seen["old"], seen["new"], seen["team"]) == (1, 2, "RKM")
+    assert seen["brand"].name == "RKM"                                  # la marca del club llega al dibujo
+    assert db.get_clip(clip_id)["tiktok_design"] == tiktok.current_design(cfg, db)   # y queda anotada con qué diseño
 
     def boom(*a, **k):
         raise RuntimeError("ffmpeg falló")

@@ -8,8 +8,10 @@ from pathlib import Path
 import json
 import time
 
+from . import brand as brand_mod
 from .config import Config
 from .db import Database
+from .scoreboard_art import ART_VERSION
 from .pipeline import channel_login
 from .tiktok_api import DRAFT_LIMIT, DRAFT_WINDOW_S, NotConnected, TikTokClient, TikTokError
 from .vertical import VerticalOptions, join_videos, make_caption, make_compilation_caption, render_vertical
@@ -135,6 +137,15 @@ def make_compilation(cfg: Config, db: Database, vod_id: str, clip_ids: list[int]
     return db.add_compilation(vod_id, ids, out, duration)
 
 
+def design_id(brand: brand_mod.Brand) -> str:
+    """Identifica el aspecto de un vídeo: la marca del club y la versión del dibujo."""
+    return f"{brand.hash}.{ART_VERSION}"
+
+
+def current_design(cfg: Config, db: Database) -> str:
+    return design_id(brand_mod.load_brand(cfg, db))
+
+
 def render_clip(cfg: Config, db: Database, clip_id: int) -> Path | None:
     """Genera la versión vertical de un clip y guarda el resultado en la base de datos."""
     clip = db.get_clip(clip_id)
@@ -145,17 +156,18 @@ def render_clip(cfg: Config, db: Database, clip_id: int) -> Path | None:
     try:
         if not src.exists():
             raise FileNotFoundError("El clip original ya no está en la carpeta")
+        brand = brand_mod.load_brand(cfg, db)
         out = render_vertical(
             cfg.ffmpeg, src, vertical_path(src),
             goal_s=clip["change_s"] - clip["start_s"],
             old=clip["old_value"], new=clip["new_value"],
             team=db.get_meta("team") or "", channel=channel_login(cfg, db) or "",
-            opts=options(cfg),
+            opts=options(cfg), brand=brand,
         )
     except Exception as exc:
         log.exception("No se pudo crear la versión TikTok del clip %s", clip_id)
         db.set_tiktok(clip_id, "error", error=f"{type(exc).__name__}: {exc}")
         return None
-    db.set_tiktok(clip_id, "ready", path=out)
+    db.set_tiktok(clip_id, "ready", path=out, design=design_id(brand))
     log.info("Versión TikTok lista: %s", out.name)
     return out

@@ -16,24 +16,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+
+from . import scoreboard_art
+from .brand import Brand, BrandSettings, make_brand
 
 log = logging.getLogger(__name__)
 
 W, H = 1080, 1920
 BOX = 1080            # el recorte de la jugada ocupa todo el ancho (cuadrado)
 BOX_Y = 560           # deja sitio arriba para el título y abajo para el canal
-ACCENT = (145, 70, 255)
-ACCENT_HEX = "0xFF4691"
 OUT_FPS = 30
 TRACK_FPS = 10
 TRACK_W, TRACK_H = 320, 180
 KEY_EVERY_S = 0.25    # cada cuánto se fija un punto de la cámara virtual
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-FONTS_TITLE = [r"C:\Windows\Fonts\impact.ttf", "impact.ttf", "DejaVuSans-Bold.ttf"]
-FONTS_TEXT = [r"C:\Windows\Fonts\seguibl.ttf", r"C:\Windows\Fonts\arialbd.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"]
 
 
 class VerticalError(Exception):
@@ -189,45 +187,7 @@ def piecewise_expr(keys: list[tuple[float, int]]) -> str:
     return expr
 
 
-# --- textos --------------------------------------------------------------------------------------
-
-def _font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for c in candidates:
-        try:
-            return ImageFont.truetype(c, size)
-        except OSError:
-            continue
-    return ImageFont.load_default(size)
-
-
-def text_layer(team: str, old: int, new: int, channel: str, tagline: str, replay: bool) -> Image.Image:
-    """Capa RGBA 1080×1920 con todo el texto fijo."""
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    big, mid, small = _font(FONTS_TITLE, 150), _font(FONTS_TEXT, 64), _font(FONTS_TEXT, 40)
-
-    def centered(y, txt, font, fill, stroke):
-        bw = d.textlength(txt, font=font)
-        d.text(((W - bw) / 2, y), txt, font=font, fill=fill, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
-
-    centered(150, "¡GOOOL!", big, (255, 255, 255, 255), 10)
-    score = f"{team.upper() or 'GOL'}  {old}  →  {new}"
-    sw = d.textlength(score, font=mid)
-    py = 335
-    d.rounded_rectangle(((W - sw) / 2 - 36, py - 14, (W + sw) / 2 + 36, py + 84), 26, fill=ACCENT + (255,))
-    centered(py, score, mid, (255, 255, 255, 255), 0)
-    if channel:
-        centered(H - 235, f"twitch.tv/{channel}", small, (255, 255, 255, 235), 4)
-    if tagline:
-        centered(H - 175, tagline, small, (210, 210, 220, 210), 4)
-    if replay:
-        tag = _font(FONTS_TEXT, 50)
-        label = "REPETICIÓN"
-        lw = d.textlength(label, font=tag)
-        d.rounded_rectangle((40, BOX_Y + 40, 40 + lw + 60, BOX_Y + 130), 20, fill=(230, 40, 60, 255))
-        d.text((70, BOX_Y + 52), label, font=tag, fill=(255, 255, 255, 255))
-    return img
-
+# --- textos ---------------------------------------------------------------------------------------
 
 def make_caption(team: str, new: int, channel: str, hashtags: str) -> str:
     """Texto sugerido para el post: lo que se ve antes de «más» son ~100–150 caracteres."""
@@ -275,29 +235,52 @@ def join_videos(ffmpeg: str, parts: list[Path], out: Path) -> float:
 
 # --- ffmpeg ------------------------------------------------------------------------------------
 
-def build_filter(src: Probe, a_keys, b_keys, a_win, b_win, opts: VerticalOptions, with_audio: bool) -> str:
+HEAD_FADE_S = 0.30      # entrada del marcador: fundido y deslizamiento hacia abajo
+HEAD_SLIDE_PX = 48
+
+
+def head_slide_expr() -> str:
+    """Posición y del bloque de arriba: llega desde HEAD_SLIDE_PX más arriba con frenado suave (cúbico)."""
+    return f"-{HEAD_SLIDE_PX}*pow(1-min(t/{HEAD_FADE_S},1),3)"
+
+
+def build_filter(src: Probe, a_keys, b_keys, a_win, b_win, opts: VerticalOptions, with_audio: bool,
+                 accent: str = "0x9146FF", animate: bool = True) -> str:
+    """Entradas: 0 clip · 1 bloque de arriba (tramo normal) · 2 pie (tramo normal) · 3 capa completa (repetición).
+
+    El tramo de la repetición se ralentiza después de superponer la capa, así que va fijo (sin animación).
+    """
     crop = min(src.height, src.width)
     a0, a1 = a_win
     b0, b1 = b_win
     slow = 1.0 / opts.replay_slow
 
-    def segment(label_in: str, win, keys, overlay_idx: int, tag: str) -> str:
+    def segment(label_in: str, win, keys, layers: list[tuple[str, str]], tag: str) -> str:
         start, end = win
-        return (
-            f"[{label_in}]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={OUT_FPS},split=2[{tag}b][{tag}m];"
+        parts = [
+            f"[{label_in}]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps={OUT_FPS},split=2[{tag}b][{tag}m]",
             f"[{tag}b]scale=135:240:force_original_aspect_ratio=increase,crop=135:240,boxblur=2:1,"
-            f"scale={W}:{H}:flags=bicubic,eq=brightness=-0.18:saturation=0.9[{tag}bg];"
-            f"[{tag}m]crop=w={crop}:h={crop}:x='{piecewise_expr(keys)}':y=0,scale={BOX}:{BOX}:flags=lanczos[{tag}mm];"
+            f"scale={W}:{H}:flags=bicubic,eq=brightness=-0.18:saturation=0.9[{tag}bg]",
+            f"[{tag}m]crop=w={crop}:h={crop}:x='{piecewise_expr(keys)}':y=0,scale={BOX}:{BOX}:flags=lanczos[{tag}mm]",
             f"[{tag}bg][{tag}mm]overlay=0:{BOX_Y},"
-            f"drawbox=x=0:y={BOX_Y - 6}:w={W}:h=6:color={ACCENT_HEX}:t=fill,"
-            f"drawbox=x=0:y={BOX_Y + BOX}:w={W}:h=5:color={ACCENT_HEX}:t=fill[{tag}c];"
-            f"[{tag}c][{overlay_idx}:v]overlay=0:0:format=auto:shortest=1[{tag}v]"
-        )
+            f"drawbox=x=0:y={BOX_Y - 6}:w={W}:h=6:color={accent}:t=fill,"
+            f"drawbox=x=0:y={BOX_Y + BOX}:w={W}:h=5:color={accent}:t=fill[{tag}c0]",
+        ]
+        for i, (layer, y) in enumerate(layers):
+            out = f"{tag}v" if i == len(layers) - 1 else f"{tag}c{i + 1}"
+            parts.append(f"[{tag}c{i}][{layer}]overlay=0:{y}:format=auto:shortest=1[{out}]")
+        return ";".join(parts)
 
-    graph = [
+    graph = []
+    if animate:
+        graph.append(f"[1:v]format=rgba,fade=t=in:st=0:d={HEAD_FADE_S}:alpha=1[hd]")
+        a_layers = [("hd", f"'{head_slide_expr()}'"), ("2:v", "0")]
+    else:
+        a_layers = [("1:v", "0"), ("2:v", "0")]
+    graph += [
         "[0:v]split=2[va][vr]",
-        segment("va", (a0, a1), a_keys, 1, "a"),
-        segment("vr", (b0, b1), b_keys, 2, "b"),
+        segment("va", (a0, a1), a_keys, a_layers, "a"),
+        segment("vr", (b0, b1), b_keys, [("3:v", "0")], "b"),
         f"[bv]setpts={slow:.3f}*PTS[bs]",
         f"[av][bs]concat=n=2:v=1:a=0[vc]",
         f"[vc]fps={OUT_FPS},format=yuv420p[v]",
@@ -313,9 +296,13 @@ def build_filter(src: Probe, a_keys, b_keys, a_win, b_win, opts: VerticalOptions
 
 
 def render_vertical(ffmpeg: str, clip: Path, out: Path, *, goal_s: float, old: int, new: int, team: str = "",
-                    channel: str = "", opts: VerticalOptions | None = None) -> Path:
-    """Genera la versión vertical de `clip`. `goal_s` es el segundo del gol dentro del clip."""
+                    channel: str = "", opts: VerticalOptions | None = None, brand: Brand | None = None) -> Path:
+    """Genera la versión vertical de `clip`. `goal_s` es el segundo del gol dentro del clip.
+
+    `brand` es la identidad del club (logo y color); sin ella se usa el diseño base con el nombre `team`.
+    """
     opts = opts or VerticalOptions()
+    brand = brand or make_brand(BrandSettings(), team, None)
     src = probe(ffmpeg, clip)
     goal = min(max(goal_s, 0.0), src.duration)
     a_win = (max(0.0, goal - opts.lead_s), src.duration)
@@ -331,14 +318,18 @@ def render_vertical(ffmpeg: str, clip: Path, out: Path, *, goal_s: float, old: i
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = out.with_name(out.stem + ".parte" + out.suffix)
     with tempfile.TemporaryDirectory() as tmp:
-        pa, pb = Path(tmp) / "a.png", Path(tmp) / "b.png"
-        text_layer(team, old, new, channel, opts.tagline, replay=False).save(pa)
-        text_layer(team, old, new, channel, opts.tagline, replay=True).save(pb)
-        graph = build_filter(src, a_keys, b_keys, a_win, b_win, opts, src.has_audio)
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(clip),
-               "-loop", "1", "-framerate", str(OUT_FPS), "-t", f"{a_win[1] - a_win[0] + 1:.3f}", "-i", str(pa),
-               "-loop", "1", "-framerate", str(OUT_FPS), "-t", f"{b_win[1] - b_win[0] + 1:.3f}", "-i", str(pb),
-               "-filter_complex", graph, "-map", "[v]"]
+        ph, pf, pb = Path(tmp) / "cabecera.png", Path(tmp) / "pie.png", Path(tmp) / "repeticion.png"
+        head = scoreboard_art.render_header(brand, old, new)
+        blank = Image.new("RGBA", head.size, (0, 0, 0, 0))
+        head.save(ph)
+        scoreboard_art.render_layer(brand, old, new, channel, opts.tagline, replay=False, header=blank).save(pf)
+        scoreboard_art.render_layer(brand, old, new, channel, opts.tagline, replay=True, header=head).save(pb)
+        graph = build_filter(src, a_keys, b_keys, a_win, b_win, opts, src.has_audio, accent=brand.palette.accent_ffmpeg)
+        a_len, b_len = a_win[1] - a_win[0] + 1, b_win[1] - b_win[0] + 1
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(clip)]
+        for png, length in ((ph, a_len), (pf, a_len), (pb, b_len)):
+            cmd += ["-loop", "1", "-framerate", str(OUT_FPS), "-t", f"{length:.3f}", "-i", str(png)]
+        cmd += ["-filter_complex", graph, "-map", "[v]"]
         if src.has_audio:
             cmd += ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"]
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(tmp_out)]
