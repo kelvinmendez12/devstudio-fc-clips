@@ -136,6 +136,8 @@ def extract_colors(logo: Image.Image, limit: int = 3) -> list[str]:
             break
         near = [(peak + d) % 36 for d in (-1, 0, 1)]
         sel = useful & np.isin(bins, near)
+        # los logos llevan sombras y biseles más oscuros: el color «de verdad» es el de la mitad más clara
+        sel &= v >= np.median(v[sel])
         w = weight[sel]
         rgb = rgba[..., :3][sel]
         mean = tuple((rgb * w[:, None]).sum(axis=0) / w.sum())

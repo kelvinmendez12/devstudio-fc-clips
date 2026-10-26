@@ -621,3 +621,113 @@ def test_send_compilation_marks_it_sent_or_failed(joined, tmp_path):
     assert tiktok.send_compilation(cfg, db, comp_id, FakeClient()) is True
     row = db.get_compilation(comp_id)
     assert row["draft_status"] == "sent" and row["draft_publish_id"] == "pubC"
+
+
+# --- identidad del club ------------------------------------------------------------------------------
+
+def logo_png(color=(210, 171, 67), size=(420, 520)):
+    import io
+    from PIL import Image, ImageDraw
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.polygon([(10, 10), (size[0] - 10, 10), (size[0] - 10, 300), (size[0] // 2, size[1] - 10), (10, 300)],
+              fill=(15, 15, 18, 255), outline=color + (255,), width=14)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def upload_logo(client, data, name="logo.png", **form):
+    import io
+    return client.post("http://localhost/api/club/logo", data={"logo": (io.BytesIO(data), name), **form},
+                       content_type="multipart/form-data")
+
+
+def test_club_page_and_defaults(setup):
+    _, _, client, _, _ = setup
+    assert client.get("http://localhost/club").status_code == 302          # sin sesión → a entrar
+    login(client)
+    page = client.get("http://localhost/club")
+    assert page.status_code == 200 and "Identidad del club" in page.get_data(as_text=True)
+    club = client.get("http://localhost/api/club").get_json()
+    assert club["primary"] == "#9146FF" and club["logo"] is None and club["show_name"] is False
+
+
+def test_club_requires_login(setup):
+    _, _, client, _, _ = setup
+    assert client.get("http://localhost/api/club").status_code == 401
+    assert upload_logo(client, logo_png()).status_code == 401
+    assert client.get("http://localhost/media/club/preview.png").status_code == 401
+
+
+def test_uploading_a_logo_sets_the_color_and_serves_the_logo(setup):
+    cfg, _, client, _, _ = setup
+    login(client)
+    resp = upload_logo(client, logo_png())
+    assert resp.status_code == 200, resp.get_json()
+    club = resp.get_json()
+    assert club["logo"]["clean"] and club["primary_auto"] and club["suggested"]
+    assert club["primary"] != "#9146FF"            # tomó el dorado del logo
+    logo = client.get(club["logo"]["url"])
+    assert logo.status_code == 200 and logo.mimetype == "image/png"
+    logo.close()
+
+
+@pytest.mark.parametrize("payload,name,message", [
+    (b"", "x.png", "ningún archivo"),
+    (b"<svg xmlns='http://www.w3.org/2000/svg'/>", "x.svg", "PNG, JPG o WebP"),
+    (b"no es una imagen", "x.png", "dañado"),
+])
+def test_bad_logos_get_a_clear_message(setup, payload, name, message):
+    _, _, client, _, _ = setup
+    login(client)
+    resp = upload_logo(client, payload, name)
+    assert resp.status_code == 400 and message in resp.get_json()["error"]
+
+
+def test_huge_uploads_are_rejected_with_413(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    resp = upload_logo(client, b"x" * (7 * 1024 * 1024))
+    assert resp.status_code == 413 and "5 MB" in resp.get_json()["error"]
+
+
+def test_missing_file_field(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    resp = client.post("http://localhost/api/club/logo", data={}, content_type="multipart/form-data")
+    assert resp.status_code == 400
+
+
+def test_saving_club_settings_validates(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    ok = client.post("http://localhost/api/club", json={"primary": "#1e88e5", "show_name": True, "short_name": "  Los   Fox "})
+    assert ok.status_code == 200 and ok.get_json()["primary"] == "#1E88E5" and ok.get_json()["short_name"] == "Los Fox"
+    assert not ok.get_json()["primary_auto"]
+    assert client.post("http://localhost/api/club", json={"primary": "azul"}).status_code == 400
+    assert client.post("http://localhost/api/club", json={"style": "otro"}).status_code == 400
+
+
+def test_preview_renders_unsaved_changes_and_never_caches(setup):
+    import io
+    from PIL import Image
+    _, _, client, _, _ = setup
+    login(client)
+    upload_logo(client, logo_png())
+    a = client.get("http://localhost/media/club/preview.png?w=360")
+    b = client.get("http://localhost/media/club/preview.png?w=360&primary=%231E88E5&old=9&new=10&show_name=1&replay=1")
+    assert a.status_code == b.status_code == 200 and a.mimetype == "image/png"
+    assert "no-store" in a.headers["Cache-Control"]
+    assert Image.open(io.BytesIO(a.data)).size == (360, 640) and a.data != b.data
+    # un color inválido no rompe: se ignora
+    assert client.get("http://localhost/media/club/preview.png?primary=zzz&old=x").status_code == 200
+
+
+def test_deleting_the_logo(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    upload_logo(client, logo_png())
+    club = client.post("http://localhost/api/club/logo/delete").get_json()
+    assert club["logo"] is None
+    assert client.get("http://localhost/media/club/logo").status_code == 404

@@ -18,6 +18,7 @@ import numpy as np
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from . import ffmpeg, tiktok, updater
+from . import brand as brand_mod, scoreboard_art
 from .config import APP_NAME, Config
 from .db import ACTIVE, Database
 from .detector import Templates, format_ts, imread_gray, imwrite, preprocess
@@ -77,6 +78,11 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
     # Las cookies de localhost se comparten entre puertos: un nombre genérico como
     # "session" lo pisaría cualquier otra app local.
     app.config["SESSION_COOKIE_NAME"] = "fc_clips_session"
+    app.config["MAX_CONTENT_LENGTH"] = brand_mod.MAX_UPLOAD_BYTES + 512 * 1024   # el logo es lo único que se sube
+
+    @app.errorhandler(413)
+    def _too_big(_exc):
+        return jsonify(error="El archivo pesa más de 5 MB"), 413
     worker = worker or Worker(cfg)
     app.extensions["rkm_worker"] = worker
     calib_frame = cfg.data_dir / "calibration" / "frame.png"
@@ -135,6 +141,11 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
         if user is None:
             return render_template("login.html", error=request.args.get("error"), app_name=APP_NAME)
         return render_template("panel.html", user=user)
+
+    @app.get("/club")
+    @login_required
+    def club_page():
+        return render_template("club.html", user=current_user())
 
     @app.get("/calibrar")
     @login_required
@@ -693,6 +704,100 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
         name = str((request.get_json(silent=True) or {}).get("name", "")).strip()[:30]
         db().set_meta("team", name)
         return jsonify(team=name)
+
+    # --- identidad del club: logo, color y estilo del marcador ---------------
+
+    def club_json() -> dict:
+        s = brand_mod.load_settings(db())
+        pal = brand_mod.Palette(s.primary)
+        return {
+            "style": s.style, "primary": s.primary, "primary_auto": s.primary_auto,
+            "short_name": s.short_name, "show_name": s.show_name,
+            "team": db().get_meta("team") or "",
+            "logo": {"url": f"/media/club/logo?h={s.logo_digest}", "width": s.logo_size[0], "height": s.logo_size[1],
+                     "clean": s.logo_clean} if s.logo_digest else None,
+            "suggested": list(s.suggested),
+            "accent": brand_mod.rgb_hex(pal.accent),
+            "design": tiktok.current_design(cfg, db()),
+        }
+
+    @app.get("/api/club")
+    @login_required
+    def api_club():
+        return jsonify(club_json())
+
+    @app.post("/api/club")
+    @login_required
+    def api_club_save():
+        body = request.get_json(silent=True) or {}
+        changes = {k: body[k] for k in ("style", "primary", "short_name", "show_name") if k in body}
+        try:
+            brand_mod.update_settings(db(), **changes)
+        except brand_mod.BrandError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(club_json())
+
+    @app.post("/api/club/logo")
+    @login_required
+    def api_club_logo():
+        upload = request.files.get("logo")
+        if upload is None:
+            return jsonify(error="Elige un archivo de logo"), 400
+        remove_bg = request.form.get("remove_bg", "1") not in ("0", "false", "")
+        try:
+            brand_mod.save_logo(cfg, db(), upload.read(brand_mod.MAX_UPLOAD_BYTES + 1), remove_bg)
+        except brand_mod.BrandError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(club_json())
+
+    @app.post("/api/club/logo/delete")
+    @login_required
+    def api_club_logo_delete():
+        brand_mod.delete_logo(cfg, db())
+        return jsonify(club_json())
+
+    @app.get("/media/club/logo")
+    @login_required
+    def media_club_logo():
+        path = brand_mod.logo_path(cfg)
+        if not path.exists():
+            abort(404)
+        return send_file(path, mimetype="image/png", max_age=3600)
+
+    @app.get("/media/club/preview.png")
+    @login_required
+    def media_club_preview():
+        """Vista previa del marcador con los ajustes guardados y, encima, los que aún no se han guardado."""
+        d = db()
+        s = brand_mod.load_settings(d)
+        args = request.args
+        try:
+            primary = brand_mod.validate_color(args["primary"]) if "primary" in args else s.primary
+        except brand_mod.BrandError:
+            primary = s.primary
+        show_name = args.get("show_name") in ("1", "true") if "show_name" in args else s.show_name
+        short = " ".join(args.get("short_name", s.short_name).split())[:brand_mod.SHORT_NAME_MAX]
+        try:
+            old = max(0, min(int(args.get("old", 0)), 999))
+            new = max(0, min(int(args.get("new", old + 1)), 999))
+        except ValueError:
+            old, new = 0, 1
+        live = brand_mod.BrandSettings(**{**s.__dict__, "primary": primary, "show_name": show_name, "short_name": short})
+        logo = None
+        if s.logo_digest:
+            try:
+                from PIL import Image
+                with Image.open(brand_mod.logo_path(cfg)) as f:
+                    logo = f.convert("RGBA")
+            except (OSError, ValueError):
+                logo = None
+        b = brand_mod.make_brand(live, d.get_meta("team") or "", logo)
+        png = scoreboard_art.render_preview(b, old, new, channel_login(cfg, d) or "tu_canal", cfg.tiktok_tagline,
+                                            width=min(max(int(args.get("w", 540)), 200), 1080),
+                                            replay=args.get("replay") in ("1", "true"))
+        resp = app.response_class(png, mimetype="image/png")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     # --- números sin reconocer -------------------------------------------
 

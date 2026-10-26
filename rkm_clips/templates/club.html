@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Identidad del club · DevStudio FC Clips</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  {% include "_topbar.html" %}
+
+  <main>
+    <div class="page-head">
+      <div>
+        <h1>Identidad del club</h1>
+        <p>Sube tu logo y elige el color: así saldrá el marcador en los vídeos verticales de TikTok.</p>
+      </div>
+    </div>
+
+    <div class="club">
+      <section class="club-preview" aria-labelledby="preview-title">
+        <h2 id="preview-title" class="visually-hidden">Vista previa del marcador</h2>
+        <div class="phone">
+          <img id="preview" alt="Vista previa: marcador del club con el resultado 0 → 1" width="360" height="640">
+        </div>
+        <div class="stage-bar">
+          <span class="hint">Probar con</span>
+          <div class="seg" role="group" aria-label="Marcador de ejemplo">
+            <button class="btn sm" type="button" data-score="0,1" aria-pressed="true">0 → 1</button>
+            <button class="btn sm" type="button" data-score="9,10" aria-pressed="false">9 → 10</button>
+          </div>
+          <label class="check"><input type="checkbox" id="replay"> Ver la repetición</label>
+        </div>
+      </section>
+
+      <aside class="panel" aria-label="Ajustes de la identidad">
+        <section>
+          <h3>1 · Logo</h3>
+          <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="logo-help">
+            <img id="logo-thumb" alt="Tu logo" hidden>
+            <div id="drop-text">
+              <b>Arrastra tu logo aquí</b> o pulsa para elegirlo
+            </div>
+          </div>
+          <input type="file" id="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <p class="hint-line" id="logo-help">PNG con fondo transparente (lo ideal), JPG o WebP. Máximo 5 MB.</p>
+          <label class="check"><input type="checkbox" id="remove-bg" checked> Quitar el fondo liso del logo (si no es transparente)</label>
+          <div class="row" style="margin-top:8px">
+            <button class="btn sm ghost" type="button" id="logo-delete" hidden>Quitar el logo</button>
+          </div>
+        </section>
+
+        <section>
+          <h3>2 · Color del club</h3>
+          <div class="field">
+            <label for="hex">Color principal</label>
+            <div class="row color-row">
+              <input type="color" id="color" aria-label="Elegir color">
+              <input type="text" id="hex" maxlength="7" spellcheck="false" autocomplete="off" placeholder="#D2AB43">
+            </div>
+          </div>
+          <div class="swatches" id="swatches" aria-label="Colores de tu logo"></div>
+          <p class="hint-line" id="color-help">Se saca solo de tu logo, pero puedes cambiarlo.</p>
+        </section>
+
+        <section>
+          <h3>3 · Nombre</h3>
+          <label class="check"><input type="checkbox" id="show-name"> Mostrar el nombre del club junto al logo</label>
+          <p class="hint-line">Déjalo apagado si tu logo ya lleva las letras del nombre.</p>
+          <div class="field" style="margin-top:8px">
+            <label for="short-name">Nombre corto (opcional)</label>
+            <input type="text" id="short-name" maxlength="14" autocomplete="off">
+            <span class="hint-line" id="team-hint"></span>
+          </div>
+        </section>
+
+        <p class="hint-line" id="design-note">Los vídeos nuevos usarán este diseño. Los que ya hiciste se pueden rehacer desde el panel.</p>
+      </aside>
+    </div>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
+  <script src="{{ url_for('static', filename='club.js') }}"></script>
+</body>
+</html>
