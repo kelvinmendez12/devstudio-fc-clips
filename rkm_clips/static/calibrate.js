@@ -94,12 +94,33 @@ function renderCal() {
   $("digits").innerHTML = [...Array(10).keys()].map(d =>
     `<button class="digit-chip ${cal.digits.includes(d) ? "have" : ""} ${selectedDigit === d ? "sel" : ""}" data-digit="${d}" title="${cal.digits.includes(d) ? "Ya guardado (puedes reemplazarlo)" : "Falta"}">${d}</button>`
   ).join("");
+  const restorable = selectedDigit !== null && (cal.restorable || []).includes(selectedDigit);
+  const bar = $("digit-actions");
+  bar.hidden = !restorable;
+  if (restorable) {
+    $("btn-restore").textContent = `Volver a la plantilla anterior del ${selectedDigit}`;
+  }
   const t = Date.now();
   $("tpl-preview").innerHTML =
     (cal.label ? `<img src="/media/template/label?t=${t}" alt="Equipo" title="Nombre del equipo">` : "") +
     cal.digits.map(d => `<img src="/media/template/${d}?t=${t}" alt="${d}" title="Dígito ${d}">`).join("");
   if (cal.frame_info) $("frame-info").textContent = `Fotograma actual: VOD ${cal.frame_info.vod_id} en ${cal.frame_info.at}`;
 }
+
+const REPLACE_WARNING = (d) =>
+  `Ya hay una plantilla del ${d}. Reemplazarla puede empeorar la lectura de los demás goles si el recorte no es muy nítido.\n\n` +
+  "La actual se guarda por si quieres volver a ella. ¿Reemplazarla?";
+
+$("btn-restore").addEventListener("click", async () => {
+  if (selectedDigit === null) return;
+  try {
+    cal = await api(`/api/calibrate/digit/${selectedDigit}/restore`, { method: "POST" });
+    toast(`Plantilla del ${selectedDigit} restaurada. Regenera los VODs afectados.`);
+    renderCal();
+  } catch (e) {
+    toast(e.message, true);
+  }
+});
 
 $("digits").addEventListener("click", (ev) => {
   const chip = ev.target.closest("[data-digit]");
@@ -131,7 +152,9 @@ $("btn-save").addEventListener("click", async () => {
   const kind = mode();
   if (kind === "digit" && selectedDigit === null) { toast("Elige abajo qué dígito es", true); return; }
   try {
-    cal = await api("/api/calibrate/save", { body: { kind, box, digit: selectedDigit } });
+    const overwrite = kind === "digit" && cal.digits.includes(selectedDigit);
+    if (overwrite && !confirm(REPLACE_WARNING(selectedDigit))) return;
+    cal = await api("/api/calibrate/save", { body: { kind, box, digit: selectedDigit, overwrite } });
     const names = { roi: "Zona del marcador", label: "Nombre del equipo", number: "Zona del número", digit: `Dígito ${selectedDigit}` };
     toast(`${names[kind]} guardado`);
     box = null;
@@ -203,7 +226,10 @@ $("answer-digits").addEventListener("click", async (ev) => {
   const chip = ev.target.closest("[data-answer]");
   if (!chip || activeUnknown === null) return;
   try {
-    const r = await api(`/api/unknowns/${activeUnknown}/resolve`, { body: { digit: Number(chip.dataset.answer) } });
+    const digit = Number(chip.dataset.answer);
+    const overwrite = cal.digits.includes(digit);
+    if (overwrite && !confirm(REPLACE_WARNING(digit))) return;
+    const r = await api(`/api/unknowns/${activeUnknown}/resolve`, { body: { digit, overwrite } });
     toast(r.value === Number(chip.dataset.answer)
       ? `Dígito ${chip.dataset.answer} guardado y comprobado. Regenera ese VOD para recuperar los goles.`
       : `Dígito ${chip.dataset.answer} guardado, pero la lectura de comprobación dio ${r.value}. Revisa la zona del número.`,

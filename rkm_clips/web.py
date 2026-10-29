@@ -19,6 +19,7 @@ from flask import Flask, abort, g, jsonify, redirect, render_template, request, 
 
 from . import ffmpeg, tiktok, updater
 from . import brand as brand_mod, scoreboard_art
+from .bootstrap import BASE_DIR
 from .config import APP_NAME, Config
 from .db import ACTIVE, Database
 from .detector import Templates, format_ts, imread_gray, imwrite, preprocess
@@ -63,6 +64,15 @@ def trim_glyph(img: np.ndarray) -> np.ndarray:
     y0, y1 = max(0, ys.min() - 1), min(img.shape[0], ys.max() + 2)
     x0, x1 = max(0, xs.min() - 1), min(img.shape[1], xs.max() + 2)
     return img[y0:y1, x0:x1].copy()
+
+
+MIN_GLYPH_CONTRAST = 100   # diferencia entre lo más claro y lo más oscuro de un dígito de plantilla (0-255)
+
+
+def glyph_is_clear(img: np.ndarray) -> bool:
+    """Un dígito de plantilla es oscuro sobre claro (o al revés) con mucho contraste; una mancha gris no sirve."""
+    lo, hi = np.percentile(img, [5, 95])
+    return float(hi - lo) >= MIN_GLYPH_CONTRAST
 
 
 def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
@@ -552,11 +562,39 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
 
     # --- calibración ---------------------------------------------------
 
+    def digit_path(digit: int) -> Path:
+        return cfg.templates_dir / "digits" / f"{digit}.png"
+
+    def previous_path(digit: int) -> Path:
+        return cfg.templates_dir / "digits" / f"{digit}.anterior.png"
+
+    def base_path(digit: int) -> Path:
+        return BASE_DIR / "digits" / f"{digit}.png"
+
+    def store_digit(digit: int, glyph: np.ndarray, overwrite: bool):
+        """Guarda la plantilla de un dígito. Devuelve None si se guardó o la respuesta de error si no.
+
+        No acepta recortes borrosos y no pisa una plantilla que ya existe sin permiso; la anterior se conserva
+        para poder restaurarla.
+        """
+        if not glyph_is_clear(glyph):
+            return jsonify(error="El recorte del número está borroso o sin contraste (puede ser un fotograma roto "
+                                 "del vídeo). Elige otro momento donde se vea nítido."), 400
+        path = digit_path(digit)
+        if path.exists():
+            if not overwrite:
+                return jsonify(error=f"Ya hay una plantilla del {digit}. Si la sustituyes, la anterior se guarda "
+                                     "por si quieres restaurarla.", needs_confirm=True), 409
+            previous_path(digit).write_bytes(path.read_bytes())
+        imwrite(path, glyph)
+        return None
+
     def calib_state() -> dict:
         d = db()
         ecfg = effective_config(cfg, d)
         digits_dir = cfg.templates_dir / "digits"
         return {
+            "restorable": [n for n in range(10) if previous_path(n).exists() or base_path(n).exists()],
             "ref": [cfg.ref_width, cfg.ref_height],
             "roi": [ecfg.roi.x, ecfg.roi.y, ecfg.roi.w, ecfg.roi.h],
             "roi_saved": bool(d.get_meta(CALIB_ROI)),
@@ -652,7 +690,8 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             digit = int(body.get("digit", -1))
             if not 0 <= digit <= 9:
                 return jsonify(error="Elige qué dígito es"), 400
-            imwrite(cfg.templates_dir / "digits" / f"{digit}.png", trim_glyph(crop))
+            if (refusal := store_digit(digit, trim_glyph(crop), bool(body.get("overwrite")))) is not None:
+                return refusal
         elif kind == "number":
             # Se guarda relativo a la etiqueta, para que siga valiendo si el marcador se desplaza.
             if not (cfg.templates_dir / "rkm_label.png").exists():
@@ -663,6 +702,28 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             d.set_meta(CALIB_NUMBER_BOX, [x - pos[0], y - pos[1], w, h])
         else:
             return jsonify(error="Tipo de recuadro desconocido"), 400
+        return jsonify(calib_state())
+
+    @app.post("/api/calibrate/digit/<int:digit>/restore")
+    @login_required
+    def api_digit_restore(digit):
+        """Vuelve a la plantilla anterior de un dígito o, si no la hay, a la original que trae la app.
+
+        La actual pasa a ser la «anterior»: pulsar otra vez deshace el cambio.
+        """
+        if not 0 <= digit <= 9:
+            abort(404)
+        source = previous_path(digit) if previous_path(digit).exists() else base_path(digit)
+        if not source.exists():
+            return jsonify(error=f"No hay una versión anterior del {digit} a la que volver"), 404
+        glyph = imread_gray(source)
+        if glyph is None:
+            return jsonify(error="No se pudo leer la plantilla anterior"), 500
+        current = digit_path(digit)
+        backup = current.read_bytes() if current.exists() else None
+        imwrite(current, glyph)
+        if backup is not None:
+            previous_path(digit).write_bytes(backup)
         return jsonify(calib_state())
 
     @app.post("/api/calibrate/test")
@@ -863,7 +924,8 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
         widths = sorted(t.shape[1] for t in known.values())
         if widths and glyph.shape[1] > 1.6 * widths[len(widths) // 2]:
             return jsonify(error="Parece un número de dos cifras: márcalo con «Un dígito», cifra a cifra"), 400
-        imwrite(cfg.templates_dir / "digits" / f"{digit}.png", glyph)
+        if (refusal := store_digit(digit, glyph, bool((request.get_json(silent=True) or {}).get("overwrite")))) is not None:
+            return refusal
         d.set_unknown_status(unknown_id, "resolved", digit)
         reader = build_reader(effective_config(cfg, d), d)
         r = effective_config(cfg, d).roi

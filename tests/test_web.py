@@ -8,7 +8,7 @@ import pytest
 from conftest import scoreboard
 from rkm_clips.config import load_config
 from rkm_clips.db import Database
-from rkm_clips.detector import imwrite
+from rkm_clips.detector import imread_gray, imwrite
 from rkm_clips.web import create_app, trim_glyph
 from test_pipeline import FakeTwitch, vod
 from rkm_clips.pipeline import sync_vods
@@ -802,3 +802,112 @@ def test_starting_the_server_clears_a_stuck_update_notice(tmp_path, monkeypatch)
     with pytest.raises(Boom):
         web_mod.serve(cfg)
     assert Database(cfg.db_path).get_meta("update_status") is None
+
+
+# --- plantillas de dígitos: no estropearlas y poder volver atrás ------------------------------------------
+
+def prepare_unknown(setup, templates, monkeypatch, digit=7, contrast=1.0, have=(0, 1, 2, 3, 4, 5, 6, 8, 9)):
+    """Deja listo un «número sin reconocer» con el dígito `digit` en pantalla. Devuelve (cliente, id del caso)."""
+    cfg, _, client, _, db = setup
+    login(client)
+    import rkm_clips.web as web
+    lh, lw = templates.label.shape
+    imwrite(cfg.templates_dir / "rkm_label.png", templates.label)
+    for d, t in templates.digits.items():
+        if d in have:
+            imwrite(cfg.templates_dir / "digits" / f"{d}.png", t)
+    board = scoreboard(digit, templates).astype(np.float32)
+    board = np.clip(128 + (board - 128) * contrast, 0, 255).astype(np.uint8)
+    frame = np.full((1080, 1920), 40, np.uint8)
+    frame[20:260, 30:390] = board
+    monkeypatch.setattr(web, "stream_url", lambda url, fmt: "x")
+    monkeypatch.setattr(web.ffmpeg, "grab_frame",
+                        lambda *a, **k: imwrite(cfg.data_dir / "calibration" / "frame.png", frame))
+    client.post("http://localhost/api/calibrate/save", json={"kind": "roi", "box": [0, 0, 480, 300]})
+    db.set_meta("calib_number_box", [lw + 18 - 4, -6, 60, lh + 12])
+    db.add_unknown("1", 120.0)
+    uid = client.get("http://localhost/api/unknowns").get_json()[0]["id"]
+    client.post(f"http://localhost/api/unknowns/{uid}/load")
+    return client, uid
+
+
+def test_glyph_quality_check_accepts_the_base_digits_and_rejects_a_grey_blob():
+    from rkm_clips.bootstrap import BASE_DIR
+    from rkm_clips.web import glyph_is_clear
+    for n in range(5):
+        assert glyph_is_clear(imread_gray(BASE_DIR / "digits" / f"{n}.png")), n
+    blob = np.full((17, 19), 140, np.uint8)
+    blob[5:12, 6:13] = 165
+    assert not glyph_is_clear(blob)
+
+
+def test_a_blurry_number_is_refused_instead_of_replacing_a_good_template(setup, templates, monkeypatch):
+    cfg = setup[0]
+    client, uid = prepare_unknown(setup, templates, monkeypatch, digit=7, contrast=0.12, have=(0, 1, 2, 3, 4, 5, 6, 8, 9))
+    resp = client.post(f"http://localhost/api/unknowns/{uid}/resolve", json={"digit": 7})
+    assert resp.status_code == 400 and "borroso" in resp.get_json()["error"]
+    assert not (cfg.templates_dir / "digits" / "7.png").exists()
+    assert len(client.get("http://localhost/api/unknowns").get_json()) == 1      # el caso sigue pendiente
+
+
+def test_replacing_an_existing_digit_needs_confirmation_and_keeps_the_old_one(setup, templates, monkeypatch):
+    cfg = setup[0]
+    client, uid = prepare_unknown(setup, templates, monkeypatch, digit=7, have=tuple(range(10)))
+    old = (cfg.templates_dir / "digits" / "7.png").read_bytes()
+    refused = client.post(f"http://localhost/api/unknowns/{uid}/resolve", json={"digit": 7})
+    assert refused.status_code == 409 and refused.get_json()["needs_confirm"]
+    assert (cfg.templates_dir / "digits" / "7.png").read_bytes() == old           # no se tocó
+    ok = client.post(f"http://localhost/api/unknowns/{uid}/resolve", json={"digit": 7, "overwrite": True})
+    assert ok.status_code == 200
+    assert (cfg.templates_dir / "digits" / "7.anterior.png").read_bytes() == old     # y se guardó la anterior
+
+
+def test_manual_digit_save_also_asks_before_replacing(setup, templates):
+    cfg, _, client, _, db = setup
+    login(client)
+    frame = np.full((1080, 1920), 40, np.uint8)
+    frame[20:260, 30:390] = scoreboard(3, templates)
+    imwrite(cfg.data_dir / "calibration" / "frame.png", frame)
+    imwrite(cfg.templates_dir / "digits" / "3.png", templates.digits[3])
+    lh, lw = templates.label.shape
+    box = [30 + 20 + lw + 17, 130 - 1, templates.digits[3].shape[1] + 2, lh + 2]
+    refused = client.post("http://localhost/api/calibrate/save", json={"kind": "digit", "box": box, "digit": 3})
+    assert refused.status_code == 409
+    assert client.post("http://localhost/api/calibrate/save",
+                       json={"kind": "digit", "box": box, "digit": 3, "overwrite": True}).status_code == 200
+
+
+def test_restoring_a_broken_digit_brings_back_the_original_and_can_be_undone(setup):
+    from rkm_clips.bootstrap import BASE_DIR
+    cfg, _, client, _, _ = setup
+    login(client)
+    digits = cfg.templates_dir / "digits"
+    digits.mkdir(parents=True, exist_ok=True)
+    blob = np.full((17, 19), 140, np.uint8)
+    imwrite(digits / "4.png", blob)                                              # el «4» estropeado de Kelvin
+    state = client.get("http://localhost/api/calibrate").get_json()
+    assert 4 in state["restorable"]
+    resp = client.post("http://localhost/api/calibrate/digit/4/restore")
+    assert resp.status_code == 200
+    assert (digits / "4.png").read_bytes() == (BASE_DIR / "digits" / "4.png").read_bytes()
+    assert imread_gray(digits / "4.anterior.png").mean() == pytest.approx(140, abs=1)
+    client.post("http://localhost/api/calibrate/digit/4/restore")                  # deshacer: vuelve a intercambiar
+    assert imread_gray(digits / "4.png").mean() == pytest.approx(140, abs=1)
+
+
+def test_restore_without_a_previous_version_is_a_clear_404(setup):
+    _, _, client, _, _ = setup
+    login(client)
+    resp = client.post("http://localhost/api/calibrate/digit/9/restore")
+    assert resp.status_code == 404 and "anterior" in resp.get_json()["error"]
+    assert client.post("http://localhost/api/calibrate/digit/12/restore").status_code == 404
+
+
+def test_backups_do_not_get_loaded_as_templates(setup, templates):
+    cfg = setup[0]
+    imwrite(cfg.templates_dir / "rkm_label.png", templates.label)
+    imwrite(cfg.templates_dir / "digits" / "1.png", templates.digits[1])
+    imwrite(cfg.templates_dir / "digits" / "1.anterior.png", templates.digits[2])
+    from rkm_clips.detector import Templates
+    loaded = Templates.load(cfg.templates_dir, False)
+    assert sorted(loaded.digits) == [1]
