@@ -43,6 +43,19 @@ def _progress_hook(on_progress):
     return hook
 
 
+def _network_opts() -> dict:
+    """Reintentos con espera creciente: si la conexión se corta (Twitch o el router cierran el socket) no se
+    da el VOD por perdido al primer fallo."""
+    backoff = lambda n: min(2 ** n, 30)  # noqa: E731
+    return {
+        "retries": 10,
+        "fragment_retries": 10,
+        "extractor_retries": 8,
+        "socket_timeout": 30,
+        "retry_sleep_functions": {"http": backoff, "fragment": backoff, "extractor": backoff},
+    }
+
+
 def download_vod(url: str, vod_id: str, dest_dir: Path, fmt: str, ffmpeg: str, fragments: int = 4,
                  on_progress=None) -> Path:
     """on_progress(fracción 0–1) puede lanzar una excepción para cancelar la descarga."""
@@ -52,8 +65,7 @@ def download_vod(url: str, vod_id: str, dest_dir: Path, fmt: str, ffmpeg: str, f
         "outtmpl": str(dest_dir / f"{vod_id}.%(ext)s"),
         "merge_output_format": "mp4",
         "concurrent_fragment_downloads": fragments,
-        "retries": 10,
-        "fragment_retries": 10,
+        **_network_opts(),
         "continuedl": True,
         "noprogress": True,
         "quiet": True,
@@ -80,6 +92,6 @@ def download_vod(url: str, vod_id: str, dest_dir: Path, fmt: str, ffmpeg: str, f
 
 def stream_url(url: str, fmt: str) -> str:
     """URL directa (m3u8) de un VOD, para sacar fotogramas sueltos sin descargarlo entero."""
-    with YoutubeDL({"format": fmt, "quiet": True, "logger": _YtdlpLogger()}) as ydl:
+    with YoutubeDL({"format": fmt, "quiet": True, "logger": _YtdlpLogger(), **_network_opts()}) as ydl:
         info = ydl.extract_info(url, download=False)
     return info["url"]

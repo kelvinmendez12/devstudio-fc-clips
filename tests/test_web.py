@@ -779,3 +779,26 @@ def test_redo_for_an_unknown_vod_is_404(setup):
     _, _, client, _, _ = setup
     login(client)
     assert client.post("http://localhost/api/vods/999/tiktok/redo").status_code == 404
+
+
+def test_starting_the_server_clears_a_stuck_update_notice(tmp_path, monkeypatch):
+    """Si una actualización terminó sin que la app volviera a arrancar bien, el aviso «Actualizando…» se quedaba para siempre."""
+    from rkm_clips import web as web_mod
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    cfg = load_config(env_file=tmp_path / "no.env")
+    db = Database(cfg.db_path)
+    db.set_meta("update_status", {"state": "done"})
+    db.close()
+
+    class Boom(Exception):
+        pass
+
+    class W:
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(web_mod, "Worker", lambda cfg_: W())
+    monkeypatch.setattr("waitress.serve", lambda *a, **k: (_ for _ in ()).throw(Boom()))
+    with pytest.raises(Boom):
+        web_mod.serve(cfg)
+    assert Database(cfg.db_path).get_meta("update_status") is None

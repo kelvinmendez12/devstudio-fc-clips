@@ -906,6 +906,7 @@ def serve(cfg: Config) -> None:
         log.info("%d VODs que estaban a medias quedan como fallidos (se pueden reintentar)", interrupted)
     db.reset_tiktok_interrupted()
     db.reset_draft_interrupted()
+    db.delete_meta("update_status")   # un arranque nuevo cierra cualquier actualización a medias (si no, el aviso se queda)
     db.close()
 
     worker = Worker(cfg)
