@@ -24,6 +24,8 @@ const ICONS = {
 let state = null;
 const picked = new Set();   // goles marcados para juntar en un solo vídeo
 const vodsEl = document.getElementById("vods");
+const compsEl = document.getElementById("comps");
+const joinEl = document.getElementById("join-bar");
 
 function fmtDate(iso) {
   const d = new Date(iso);
@@ -133,8 +135,9 @@ function compDraftHtml(k) {
 function compHtml(k) {
   if (!k.exists) return "";
   const title = `${k.goals} goles juntos · ${k.duration}`;
+  const origin = k.directos > 1 ? ` de ${k.directos} directos` : "";
   return `<div class="comp">
-    <div class="comp-info">${ICONS.join}<div><b>${k.goals} goles en un solo vídeo</b><span>${esc(k.duration)} · listo para publicar</span></div></div>
+    <div class="comp-info">${ICONS.join}<div><b>${k.goals} goles${origin} en un solo vídeo</b><span>${esc(k.duration)} · listo para publicar</span></div></div>
     <div class="comp-actions">
       <button class="btn sm" data-play-comp="${k.id}" data-title="${esc(title)}" data-caption="${esc(k.caption)}">${ICONS.phone} Ver</button>
       <a class="icon-btn" href="/media/compilation/${k.id}?download=1" title="Descargar" aria-label="Descargar">${ICONS.download}</a>
@@ -199,15 +202,6 @@ function vodHtml(v) {
       : `<div class="clips-empty">No se detectó ningún gol de tu equipo en este VOD. Si sí hubo goles, revisa la calibración.</div>`;
   }
 
-  const comps = (v.compilations || []).map(compHtml).join("");
-  const mine = v.clips.filter(c => picked.has(c.id) && (c.tiktok || {}).status === "ready");
-  const mixed = new Set(mine.map(c => c.tiktok.design)).size > 1;
-  const joinBar = v.status === "done" && v.clips.some(c => (c.tiktok || {}).status === "ready")
-    ? `<div class="join-bar">${ICONS.join}${mine.length >= 2
-        ? `<span>${mine.length} goles marcados: se juntarán por orden de partido en un solo vídeo.${mixed ? " Ojo: no todos tienen el mismo diseño del marcador; rehazlos antes si quieres que coincidan." : ""}</span>
-           <button class="btn sm primary" data-join="${v.id}">Juntar ${mine.length} en un TikTok</button>
-           <button class="btn sm ghost" data-unpick="${v.id}">Quitar marcas</button>`
-        : `<span>Marca «Juntar» en dos o más goles para subirlos a TikTok como un solo vídeo.</span>`}</div>` : "";
 
   return `<article class="vod" id="vod-${v.id}">
     <div class="vod-main">
@@ -225,13 +219,50 @@ function vodHtml(v) {
       <div class="vod-actions">${action}</div>
     </div>
     ${clips}
-    ${joinBar}
-    ${comps ? `<div class="comps">${comps}</div>` : ""}
   </article>`;
+}
+
+// Goles marcados en cualquier directo (los que ya no existen o no tienen versión vertical no cuentan).
+function pickedClips() {
+  const out = [];
+  for (const v of state.vods) {
+    for (const c of v.clips) {
+      if (picked.has(c.id) && (c.tiktok || {}).status === "ready") out.push({ ...c, vod: v.id });
+    }
+  }
+  return out;
+}
+
+function renderJoinBar() {
+  const mine = pickedClips();
+  joinEl.hidden = mine.length === 0;
+  if (!mine.length) { joinEl.innerHTML = ""; return; }
+  const directos = new Set(mine.map(c => c.vod)).size;
+  const mixed = new Set(mine.map(c => c.tiktok.design)).size > 1;
+  joinEl.innerHTML = ICONS.join + (mine.length >= 2
+    ? `<span><b>${mine.length} goles</b> de ${directos} ${directos === 1 ? "directo" : "directos"}: se juntarán por orden cronológico en un solo vídeo.${mixed ? " No todos tienen el mismo diseño del marcador; rehazlos antes si quieres que coincidan." : ""}</span>
+       <button class="btn sm primary" data-join>Juntar ${mine.length} en un TikTok</button>`
+    : `<span>1 gol marcado: marca al menos otro (puede ser de otro directo) para juntarlos.</span>`) +
+    `<button class="btn sm ghost" data-unpick>Quitar marcas</button>`;
+}
+
+function renderComps() {
+  const list = state.compilations || [];
+  const html = list.map(compHtml).join("");
+  const anyReady = state.vods.some(v => v.clips.some(c => (c.tiktok || {}).status === "ready"));
+  const out = html
+    ? `<section class="comps-block"><h2>Vídeos juntados</h2><div class="comps">${html}</div></section>`
+    : (anyReady ? `<p class="join-hint">${ICONS.join} Marca <b>Juntar</b> en los goles que quieras, de uno o de varios directos, y se unirán en un solo vídeo para TikTok.</p>` : "");
+  if (out !== compsEl.dataset.last) {
+    compsEl.innerHTML = out;
+    compsEl.dataset.last = out;
+  }
 }
 
 function render() {
   renderNotices();
+  renderComps();
+  renderJoinBar();
   const s = state.sync;
   const tt = state.tiktok || {};
   document.getElementById("sync-line").textContent = state.channel
@@ -296,23 +327,23 @@ function waitForRestart() {
   }, 2500);
 }
 
-vodsEl.addEventListener("click", async (ev) => {
+async function onAction(ev) {
   const el = ev.target.closest("[data-generate],[data-cancel],[data-play],[data-reveal],[data-tiktok],[data-tiktok-vod],[data-send],[data-send-vod],[data-redo-vod],[data-play-tt],[data-join],[data-unpick],[data-send-comp],[data-del-comp],[data-play-comp],[data-copy]");
   if (!el) return;
   try {
     if (el.dataset.tiktok) {
       el.disabled = true;
       await api(`/api/clips/${el.dataset.tiktok}/tiktok`, { method: "POST" });
-    } else if (el.dataset.join) {
-      const vod = state.vods.find(v => v.id === el.dataset.join);
-      const ids = vod.clips.filter(c => picked.has(c.id)).map(c => c.id);
+    } else if (el.dataset.join !== undefined) {
+      const ids = pickedClips().map(c => c.id);
       el.disabled = true;
       toast("Juntando los goles…");
-      await api(`/api/vods/${vod.id}/compilations`, { method: "POST", body: { clip_ids: ids } });
+      await api("/api/compilations", { method: "POST", body: { clip_ids: ids } });
       ids.forEach(i => picked.delete(i));
-      toast("Listo: lo tienes debajo de los goles");
-    } else if (el.dataset.unpick) {
-      state.vods.find(v => v.id === el.dataset.unpick).clips.forEach(c => picked.delete(c.id));
+      toast("Listo: lo tienes arriba, en «Vídeos juntados»");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else if (el.dataset.unpick !== undefined) {
+      picked.clear();
     } else if (el.dataset.sendComp) {
       el.disabled = true;
       await api(`/api/compilations/${el.dataset.sendComp}/send`, { method: "POST" });
@@ -364,7 +395,8 @@ vodsEl.addEventListener("click", async (ev) => {
     el.disabled = false;
     toast(e.message, true);
   }
-});
+}
+[vodsEl, compsEl, joinEl].forEach(box => box.addEventListener("click", onAction));
 
 const player = document.getElementById("player");
 const video = document.getElementById("player-video");

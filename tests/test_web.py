@@ -534,10 +534,10 @@ def joined(setup, monkeypatch):
 
 def test_joining_goals_creates_one_video_in_match_order(joined):
     cfg, client, _, db, ids, calls = joined
-    resp = client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": [ids[2], ids[0]]})
+    resp = client.post("http://localhost/api/compilations", json={"clip_ids": [ids[2], ids[0]]})
     assert resp.status_code == 200, resp.get_json()
     assert calls == [["clip1_tiktok.mp4", "clip3_tiktok.mp4"]]   # por orden de partido, no de selección
-    comp = client.get("http://localhost/api/state").get_json()["vods"][0]["compilations"][0]
+    comp = client.get("http://localhost/api/state").get_json()["compilations"][0]
     assert comp["goals"] == 2 and comp["exists"] and comp["duration"] == "00:01:15"
     assert "2 goles" in comp["caption"]
     assert client.get(f"http://localhost/media/compilation/{comp['id']}").data == b"juntos"
@@ -545,25 +545,25 @@ def test_joining_goals_creates_one_video_in_match_order(joined):
 
 def test_joining_needs_two_ready_goals(joined):
     cfg, client, _, db, ids, _ = joined
-    one = client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": [ids[0]]})
+    one = client.post("http://localhost/api/compilations", json={"clip_ids": [ids[0]]})
     assert one.status_code == 409 and "al menos dos" in one.get_json()["error"]
     raw, _ = add_clip(cfg, db, new=9)   # sin versión vertical
-    resp = client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": [ids[0], raw]})
+    resp = client.post("http://localhost/api/compilations", json={"clip_ids": [ids[0], raw]})
     assert resp.status_code == 409 and "versión vertical" in resp.get_json()["error"]
-    assert client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ["x"]}).status_code == 400
+    assert client.post("http://localhost/api/compilations", json={"clip_ids": ["x"]}).status_code == 400
 
 
 def test_joining_the_same_selection_twice_replaces_the_video(joined):
     _, client, _, db, ids, _ = joined
     for _ in range(2):
-        assert client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids[:2]}).status_code == 200
-    assert len(db.compilations_for("1")) == 1
+        assert client.post("http://localhost/api/compilations", json={"clip_ids": ids[:2]}).status_code == 200
+    assert len(db.all_compilations()) == 1
 
 
 def test_a_compilation_is_sent_as_one_draft_and_counts_once(joined):
     cfg, client, worker, db, ids, _ = joined
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
-    comp_id = db.compilations_for("1")[0]["id"]
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
+    comp_id = db.all_compilations()[0]["id"]
     assert client.post(f"http://localhost/api/compilations/{comp_id}/send").status_code == 409   # sin conectar
     connect_tiktok(db)
     assert client.post(f"http://localhost/api/compilations/{comp_id}/send").status_code == 200
@@ -574,43 +574,43 @@ def test_a_compilation_is_sent_as_one_draft_and_counts_once(joined):
 
 def test_deleting_a_sent_compilation_keeps_the_daily_count(joined):
     _, client, _, db, ids, _ = joined
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
-    comp = db.compilations_for("1")[0]
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
+    comp = db.all_compilations()[0]
     assert client.post(f"http://localhost/api/compilations/{comp['id']}/delete").status_code == 200
-    assert db.compilations_for("1") == []          # sin enviar: desaparece del todo
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
-    comp = db.compilations_for("1")[0]
+    assert db.all_compilations() == []          # sin enviar: desaparece del todo
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
+    comp = db.all_compilations()[0]
     db.set_compilation_draft(comp["id"], "sent")
     assert client.post(f"http://localhost/api/compilations/{comp['id']}/delete").status_code == 200
     assert not Path(comp["path"]).exists() and db.drafts_sent_since(0) == 1   # el envío sigue contando
-    shown = client.get("http://localhost/api/state").get_json()["vods"][0]["compilations"]
+    shown = client.get("http://localhost/api/state").get_json()["compilations"]
     assert shown[0]["exists"] is False   # el panel la oculta
 
 
 def test_joining_again_after_sending_keeps_the_sent_count(joined):
     _, client, _, db, ids, _ = joined
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
-    first = db.compilations_for("1")[0]
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
+    first = db.all_compilations()[0]
     db.set_compilation_draft(first["id"], "sent")
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
-    rows = db.compilations_for("1")
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
+    rows = db.all_compilations()
     assert len(rows) == 2 and db.drafts_sent_since(0) == 1
     assert not Path(rows[0]["path"]).exists() and Path(rows[1]["path"]).exists()
 
 
 def test_regenerating_a_vod_drops_its_compilations(joined):
     _, client, _, db, ids, _ = joined
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
     db.delete_clips("1")
-    assert db.compilations_for("1") == []
+    assert db.all_compilations() == []
 
 
 def test_send_compilation_marks_it_sent_or_failed(joined, tmp_path):
     from rkm_clips import tiktok
     from rkm_clips.tiktok_api import TikTokError
     cfg, client, _, db, ids, _ = joined
-    client.post("http://localhost/api/vods/1/compilations", json={"clip_ids": ids})
-    comp_id = db.compilations_for("1")[0]["id"]
+    client.post("http://localhost/api/compilations", json={"clip_ids": ids})
+    comp_id = db.all_compilations()[0]["id"]
 
     class FakeClient:
         def __init__(self, fail=None):
@@ -911,3 +911,76 @@ def test_backups_do_not_get_loaded_as_templates(setup, templates):
     from rkm_clips.detector import Templates
     loaded = Templates.load(cfg.templates_dir, False)
     assert sorted(loaded.digits) == [1]
+
+
+# --- juntar goles de varios directos ------------------------------------------------------------------
+
+@pytest.fixture
+def two_streams(setup, monkeypatch):
+    """Dos directos (el 1 es el más antiguo) con goles listos y un «ffmpeg» falso que apunta el orden de unión."""
+    from rkm_clips import tiktok
+    cfg, _, client, worker, db = setup
+    login(client)
+    db.upsert_vod(vod(2))
+    first = [add_ready_clip(cfg, db, new=n) for n in (1, 2)]                       # directo 1
+    second = []
+    for n in (7, 8):                                                                 # directo 2
+        clip_id, path = add_clip(cfg, db, vod_id="2", new=n)
+        vertical = path.with_name(path.stem + "_tiktok.mp4")
+        vertical.write_bytes(b"vertical")
+        db.set_tiktok(clip_id, "ready", path=vertical)
+        second.append(clip_id)
+    joins = []
+
+    def fake_join(ffmpeg, parts, out):
+        joins.append([p.name for p in parts])
+        out.write_bytes(b"juntos")
+        return 60.0
+
+    monkeypatch.setattr(tiktok, "join_videos", fake_join)
+    return cfg, client, db, first, second, joins
+
+
+def test_goals_from_several_streams_can_be_joined_in_chronological_order(two_streams):
+    _, client, db, first, second, joins = two_streams
+    # uno del primer directo y dos del segundo, marcados en desorden
+    resp = client.post("http://localhost/api/compilations", json={"clip_ids": [second[1], first[0], second[0]]})
+    assert resp.status_code == 200, resp.get_json()
+    assert joins == [["clip1_tiktok.mp4", "clip7_tiktok.mp4", "clip8_tiktok.mp4"]]
+    state = client.get("http://localhost/api/state").get_json()
+    comp = state["compilations"][0]
+    assert comp["goals"] == 3 and comp["directos"] == 2 and comp["exists"]
+    assert all("compilations" not in v for v in state["vods"])                      # ya no cuelgan de un directo
+    assert db.all_compilations()[0]["vod_id"] == "1"                                # se registra con el primer directo
+
+
+def test_a_selection_inside_one_stream_still_counts_as_one(two_streams):
+    _, client, _, first, _, _ = two_streams
+    client.post("http://localhost/api/compilations", json={"clip_ids": first})
+    assert client.get("http://localhost/api/state").get_json()["compilations"][0]["directos"] == 1
+
+
+def test_regenerating_any_of_the_streams_drops_the_joined_video(two_streams):
+    _, client, db, first, second, _ = two_streams
+    client.post("http://localhost/api/compilations", json={"clip_ids": [first[0], second[0]]})
+    client.post("http://localhost/api/compilations", json={"clip_ids": first})             # otra, solo del directo 1
+    assert len(db.all_compilations()) == 2
+    db.delete_clips("2")                                                                 # se regenera el directo 2
+    left = db.all_compilations()
+    assert len(left) == 1 and set(__import__("json").loads(left[0]["clip_ids"])) == set(first)
+
+
+def test_joining_clips_that_no_longer_exist_is_refused_clearly(two_streams):
+    _, client, db, first, second, _ = two_streams
+    resp = client.post("http://localhost/api/compilations", json={"clip_ids": [first[0], 99999]})
+    assert resp.status_code == 409 and "ya no existe" in resp.get_json()["error"]
+
+
+def test_a_joined_video_from_several_streams_is_sent_as_one_draft(two_streams):
+    cfg, client, db, first, second, _ = two_streams
+    connect_tiktok(db)
+    client.post("http://localhost/api/compilations", json={"clip_ids": [first[0], second[0]]})
+    comp_id = db.all_compilations()[0]["id"]
+    assert client.post(f"http://localhost/api/compilations/{comp_id}/send").status_code == 200
+    db.set_compilation_draft(comp_id, "sent")
+    assert client.get("http://localhost/api/state").get_json()["tiktok"]["left"] == 4

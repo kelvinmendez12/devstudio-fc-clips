@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -280,17 +281,6 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             }
             for c in db().clips_for(row["id"])
         ]
-        compilations = [
-            {
-                "id": k["id"],
-                "goals": k["goals"],
-                "duration": format_ts(k["duration_s"]),
-                "exists": Path(k["path"]).exists(),
-                "caption": tiktok.compilation_caption(cfg, db(), k),
-                "draft": {"status": k["draft_status"], "error": k["draft_error"]},
-            }
-            for k in db().compilations_for(row["id"])
-        ]
         return {
             "id": row["id"],
             "title": row["title"],
@@ -305,7 +295,19 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             "live": is_live_vod(db(), row["id"]),
             "unknowns": db().unknowns_for(row["id"]),
             "clips": clips,
-            "compilations": compilations,
+        }
+
+    def compilation_json(k) -> dict:
+        clip_ids = json.loads(k["clip_ids"])
+        directos = {c["vod_id"] for c in (db().get_clip(i) for i in clip_ids) if c is not None}
+        return {
+            "id": k["id"],
+            "goals": k["goals"],
+            "directos": max(1, len(directos)),
+            "duration": format_ts(k["duration_s"]),
+            "exists": Path(k["path"]).exists(),
+            "caption": tiktok.compilation_caption(cfg, db(), k),
+            "draft": {"status": k["draft_status"], "error": k["draft_error"]},
         }
 
     @app.get("/api/state")
@@ -335,6 +337,7 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             calibrated=calibrated,
             pending_unknowns=len(d.pending_unknowns()),
             vods=[vod_json(r, design) for r in d.list_vods()],
+            compilations=[compilation_json(k) for k in reversed(d.all_compilations())],
         )
 
     @app.post("/api/vods/<vod_id>/generate")
@@ -471,17 +474,16 @@ def create_app(cfg: Config, worker: Worker | None = None) -> Flask:
             abort(404)
         return row
 
-    @app.post("/api/vods/<vod_id>/compilations")
+    @app.post("/api/compilations")
     @login_required
-    def api_compilation_create(vod_id):
-        if db().get_vod(vod_id) is None:
-            abort(404)
+    def api_compilation_create():
+        """Junta goles marcados, de uno o de varios directos, en un solo vídeo."""
         try:
             ids = [int(i) for i in (request.get_json(silent=True) or {}).get("clip_ids", [])]
         except (TypeError, ValueError):
             return jsonify(error="Selección no válida"), 400
         try:
-            comp_id = tiktok.make_compilation(cfg, db(), vod_id, ids)
+            comp_id = tiktok.make_compilation(cfg, db(), ids)
         except (TikTokError, VerticalError) as exc:
             return jsonify(error=str(exc)), 409
         return jsonify(ok=True, id=comp_id)

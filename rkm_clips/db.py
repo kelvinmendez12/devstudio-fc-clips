@@ -238,8 +238,13 @@ class Database:
         ).fetchall()
 
     def delete_clips(self, vod_id: str) -> None:
-        # Las compilaciones apuntan a clips concretos: si se regeneran, dejan de valer.
-        self._exec("DELETE FROM compilations WHERE vod_id = ?", (vod_id,))
+        # Las compilaciones apuntan a clips concretos (a veces de varios directos): si alguno se regenera,
+        # la compilación deja de valer.
+        gone = {r["id"] for r in self.conn.execute("SELECT id FROM clips WHERE vod_id = ?", (vod_id,))}
+        for comp in self.all_compilations():
+            if gone & set(json.loads(comp["clip_ids"])):
+                self.conn.execute("DELETE FROM compilations WHERE id = ?", (comp["id"],))
+        self.conn.commit()
         self._exec("DELETE FROM clips WHERE vod_id = ?", (vod_id,))
 
     # --- compilaciones -------------------------------------------------
@@ -254,6 +259,9 @@ class Database:
 
     def get_compilation(self, comp_id: int) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+
+    def all_compilations(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM compilations ORDER BY id").fetchall()
 
     def compilations_for(self, vod_id: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM compilations WHERE vod_id = ? ORDER BY id", (vod_id,)).fetchall()

@@ -50,11 +50,12 @@ app de TikTok **como borrador**; tú lo revisas, pegas el texto del post (botón
 La app nunca publica por ti. TikTok admite como máximo **5 borradores pendientes al día**; el panel cuenta
 los que envías y avisa cuando te quedas sin cupo.
 
-**Varios goles en un solo vídeo.** En cada gol con versión vertical hay una casilla **Juntar**: marca dos o
-más y pulsa **Juntar N en un TikTok**. La app los une por orden de partido en un solo vídeo (tarda unos
-segundos: se recodifica para que TikTok lo acepte) y lo deja debajo de los goles, con su texto de post y su
-botón **Enviar a TikTok**. Así solo tienes que pulsar publicar, sin descargar ni editar nada, y cuenta como un
-único borrador.
+**Varios goles en un solo vídeo.** En cada gol con versión vertical hay una casilla **Juntar**. Marca los que
+quieras, **de un mismo directo o de varios** (por ejemplo uno de ayer y dos de hoy), y pulsa **Juntar N en un
+TikTok** en la barra que aparece abajo. La app los une por orden cronológico en un solo vídeo (tarda unos
+segundos: se recodifica para que TikTok lo acepte) y lo deja arriba, en **Vídeos juntados**, con su texto de
+post y su botón **Enviar a TikTok**. Así solo tienes que pulsar publicar, sin descargar ni editar nada, y cuenta
+como un único borrador. Si regeneras un directo, los vídeos juntados que incluían sus goles se borran.
 
 ### Si algún número no se lee
 

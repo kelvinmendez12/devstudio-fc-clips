@@ -93,9 +93,9 @@ def send_compilation(cfg: Config, db: Database, comp_id: int, client: TikTokClie
                    lambda status, **kw: db.set_compilation_draft(comp_id, status, **kw))
 
 
-def compilation_path(cfg: Config, vod_id: str, clip_ids: list[int]) -> Path:
+def compilation_path(cfg: Config, first_vod: str, clip_ids: list[int]) -> Path:
     stamp = time.strftime("%H%M%S")
-    return cfg.clips_dir / f"compilacion_{vod_id}_{'-'.join(map(str, clip_ids))}_{stamp}_tiktok.mp4"
+    return cfg.clips_dir / f"compilacion_{first_vod}_{'-'.join(map(str, clip_ids))}_{stamp}_tiktok.mp4"
 
 
 def compilation_caption(cfg: Config, db: Database, comp) -> str:
@@ -103,14 +103,16 @@ def compilation_caption(cfg: Config, db: Database, comp) -> str:
                                     cfg.tiktok_hashtags)
 
 
-def make_compilation(cfg: Config, db: Database, vod_id: str, clip_ids: list[int]) -> int:
-    """Junta las versiones verticales de varios goles (en orden de partido) en un solo vídeo."""
-    clips = {c["id"]: c for c in db.clips_for(vod_id)}
+def make_compilation(cfg: Config, db: Database, clip_ids: list[int]) -> int:
+    """Junta las versiones verticales de varios goles, de uno o de varios directos, en un solo vídeo.
+
+    Van en orden cronológico (primero el directo más antiguo y dentro de cada uno, por minuto).
+    """
     chosen = []
     for cid in set(clip_ids):
-        clip = clips.get(cid)
+        clip = db.get_clip(cid)
         if clip is None:
-            raise TikTokError("Uno de los goles no es de este VOD")
+            raise TikTokError("Uno de los goles ya no existe (se regeneró su directo): vuelve a marcarlos")
         if clip["tiktok_status"] != "ready" or not clip["tiktok_path"] or not Path(clip["tiktok_path"]).is_file():
             raise TikTokError("Todos los goles elegidos necesitan su versión vertical (créala primero)")
         chosen.append(clip)
@@ -118,23 +120,26 @@ def make_compilation(cfg: Config, db: Database, vod_id: str, clip_ids: list[int]
         raise TikTokError("Elige al menos dos goles para juntarlos")
     if len(chosen) > MAX_COMPILATION:
         raise TikTokError(f"Como mucho {MAX_COMPILATION} goles por vídeo")
-    chosen.sort(key=lambda c: c["change_s"])
+    started = {c["vod_id"]: (db.get_vod(c["vod_id"])["created_at"] or "") for c in chosen}
+    chosen.sort(key=lambda c: (started[c["vod_id"]], c["vod_id"], c["change_s"]))
     ids = [c["id"] for c in chosen]
-    out = compilation_path(cfg, vod_id, ids)
-    used = {r["path"] for r in db.compilations_for(vod_id)}
+    first_vod = chosen[0]["vod_id"]
+    out = compilation_path(cfg, first_vod, ids)
+    existing = db.all_compilations()
+    used = {r["path"] for r in existing}
     n = 1
     while str(out) in used:  # nunca se reutiliza la ruta de una ya registrada (aunque esté oculta)
         n += 1
         out = out.with_name(out.stem.removesuffix("_tiktok").rsplit("-v", 1)[0] + f"-v{n}_tiktok.mp4")
     duration = join_videos(cfg.ffmpeg, [Path(c["tiktok_path"]) for c in chosen], out)
-    for old in db.compilations_for(vod_id):  # misma selección: la nueva sustituye a la anterior
+    for old in existing:  # misma selección: la nueva sustituye a la anterior
         if json.loads(old["clip_ids"]) != ids:
             continue
         Path(old["path"]).unlink(missing_ok=True)
         if old["draft_status"] != "sent":
             db.delete_compilation(old["id"])
         # Una ya enviada se queda (sin archivo, oculta) para que el cupo diario cuente ese envío.
-    return db.add_compilation(vod_id, ids, out, duration)
+    return db.add_compilation(first_vod, ids, out, duration)
 
 
 def design_id(brand: brand_mod.Brand) -> str:

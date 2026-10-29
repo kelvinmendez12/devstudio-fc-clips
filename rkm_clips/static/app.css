@@ -282,3 +282,14 @@ dialog.player.vertical video { max-height: 78vh; }
 @media (max-width: 900px) { .club { grid-template-columns: 1fr; } }
 
 .tt-stale { flex: 1 0 100%; font-size: 11px; font-weight: 600; color: #e8c872; background: rgba(232,200,114,.1); border: 1px solid rgba(232,200,114,.3); border-radius: 6px; padding: 2px 8px; text-align: center; }
+
+/* Juntar goles de varios directos */
+.comps-block { margin-bottom: 18px; }
+.comps-block h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.comps-block .comps { padding: 0; }
+.join-hint { display: flex; gap: 8px; align-items: center; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+.join-hint svg { width: 18px; height: 18px; flex: none; }
+.join-sticky { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 20; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; max-width: min(860px, calc(100vw - 24px)); padding: 10px 14px; background: var(--surface); border: 1px solid var(--accent); border-radius: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.55); font-size: 13px; }
+.join-sticky[hidden] { display: none; }
+.join-sticky svg { width: 20px; height: 20px; flex: none; color: var(--accent-2, #b98cff); }
+.join-sticky span { flex: 1 1 280px; }
